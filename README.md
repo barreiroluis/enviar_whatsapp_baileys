@@ -4,7 +4,7 @@ Servicio de WhatsApp con Baileys + API HTTP para envio de mensajes y recordatori
 
 ## Requisitos
 
-- Node.js 18+
+- Node.js 20+
 - NPM
 - (Opcional) MySQL si `DATABASE=mysql`
 
@@ -41,4 +41,3 @@ Este proyecto ignora por defecto:
 - `*.log`
 
 No publiques credenciales reales ni sesiones activas de WhatsApp.
-
