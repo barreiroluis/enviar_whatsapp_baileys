@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>QR WhatsApp</title>
+  </head>
+  <body>
+    <h2>QR WhatsApp</h2>
+    <div id="status"></div>
+    <img id="qr" />
+
+    <script>
+      const qrImg = document.getElementById("qr");
+      const status = document.getElementById("status");
+
+      const baseURL = window.location.origin;
+      // ej: http://85.209.95.27:30000
+
+      const evtSource = new EventSource(`${baseURL}/qr`);
+      evtSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.qr) {
+          qrImg.src =
+            "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" +
+            encodeURIComponent(data.qr);
+        }
+
+        if (data.status === "connected") {
+          status.innerText = "✅ WhatsApp conectado";
+          qrImg.remove();
+        }
+      };
+    </script>
+  </body>
+</html>
