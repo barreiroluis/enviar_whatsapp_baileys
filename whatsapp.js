@@ -7,6 +7,7 @@ import { logError } from "./utils/logger.js";
 
 let sock = null;
 let currentQR = null;
+let connectionStatus = "disconnected";
 const qrClients = new Set(); // clientes SSE
 
 export async function initWhatsApp() {
@@ -22,16 +23,20 @@ export async function initWhatsApp() {
   sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
     if (qr) {
       currentQR = qr;
+      connectionStatus = "qr";
       console.log("🔄 Nuevo QR generado");
       notifyQRClients({ qr });
     }
 
     if (connection === "open") {
+      connectionStatus = "connected";
+      currentQR = null;
       console.log("✅ WhatsApp conectado");
       notifyQRClients({ status: "connected" });
     }
 
     if (connection === "close") {
+      connectionStatus = "disconnected";
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const reason =
         statusCode !== undefined ? DisconnectReason[statusCode] : "unknown";
@@ -45,6 +50,8 @@ export async function initWhatsApp() {
       const shouldReconnect =
         lastDisconnect?.error?.output?.statusCode !==
         DisconnectReason.loggedOut;
+
+      notifyQRClients({ status: "disconnected", reason });
 
       if (shouldReconnect) initWhatsApp();
     }
@@ -86,7 +93,14 @@ export function getSock() {
 export function addQRClient(res) {
   qrClients.add(res);
 
-  // enviar estado actual al conectar
+  // enviar estado actual al conectar (evita quedarse en "listening")
+  if (sock?.user || connectionStatus === "connected") {
+    res.write(`data: ${JSON.stringify({ status: "connected" })}\n\n`);
+  } else if (connectionStatus === "disconnected") {
+    res.write(`data: ${JSON.stringify({ status: "disconnected" })}\n\n`);
+  }
+
+  // si hay QR vigente, también enviarlo
   if (currentQR) {
     res.write(`data: ${JSON.stringify({ qr: currentQR })}\n\n`);
   }
