@@ -258,6 +258,27 @@ export async function procesarRecordatoriosCron() {
       return;
     }
 
+    // 🧹 Limpieza de locks huérfanos para evitar bloqueos permanentes
+    const unlockResult = await conn.query(
+      `
+      UPDATE creditos
+      SET recordatorio_lock = 0
+      WHERE id_empresa = ?
+        AND recordatorio_lock = 1
+        AND (
+          recordatorio_update IS NULL
+          OR DATE(recordatorio_update) < CURDATE()
+        )
+      `,
+      [ID_EMPRESA],
+    );
+
+    if (unlockResult?.affectedRows > 0) {
+      console.log(
+        `🧹 Locks liberados empresa ${ID_EMPRESA}: ${unlockResult.affectedRows}`,
+      );
+    }
+
     // ⛔ Restricción horaria configurable
     if (hora < CRON_START_HOUR || hora >= CRON_END_HOUR) {
       console.log(
