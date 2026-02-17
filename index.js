@@ -184,6 +184,74 @@ function generarMensaje({
   `;
 }
 
+function describirEstadoVencimiento(dias) {
+  if (dias < 0) return `Vencido hace ${Math.abs(dias)} días`;
+  if (dias === 0) return "Vence hoy";
+  if (dias === 1) return "Vence mañana";
+  return `Vence en ${dias} días`;
+}
+
+function debeEnviarCreditoHoy({ diaSemana, dias, id_credito }) {
+  const esUrgente = dias === 0 || dias === 1;
+
+  if (diaSemana === 0) {
+    return esUrgente;
+  }
+
+  if (esUrgente) {
+    return true;
+  }
+
+  const esPar = id_credito % 2 === 0;
+  return (
+    (esPar && [1, 3, 5].includes(diaSemana)) ||
+    (!esPar && [2, 4, 6].includes(diaSemana))
+  );
+}
+
+function generarMensajeAgrupado({ nombre, creditos, cbu_alias = null }) {
+  const formasPago = cbu_alias
+    ? heredoc`
+        *Formas de pago*
+        - RapiPago
+        - PagoFácil
+        - Saldo MercadoPago
+        - Transferencia
+        ${cbu_alias}
+
+        📎 Luego de pagar, podés *responder este mensaje con el comprobante*.
+      `
+    : heredoc`
+        *Formas de pago*
+        - RapiPago
+        - PagoFácil
+        - Saldo MercadoPago
+      `;
+
+  const resumenCreditos = creditos
+    .map((credito) => {
+      const link = `https://cuotafacil.com/cuotas.php?id=${credito.id_credito}`;
+      return heredoc`
+        • Crédito #${credito.id_credito}
+        ${describirEstadoVencimiento(credito.dias)}
+        Deuda: $${Number(credito.total_deuda || 0).toLocaleString("es-AR")}
+        ${link}
+      `;
+    })
+    .join("\n\n");
+
+  return heredoc`
+    *RECORDATORIO*
+    ${nombre}
+
+    Tenés ${creditos.length} crédito(s) para revisar:
+
+    ${resumenCreditos}
+
+    ${formasPago}
+  `;
+}
+
 function heredoc(strings, ...values) {
   let raw = strings.reduce((acc, str, i) => acc + str + (values[i] ?? ""), "");
 
@@ -243,6 +311,7 @@ export async function procesarRecordatoriosCron() {
   const LIMITE_ENVIO = 50;
 
   let enviados = 0;
+  let creditosNotificados = 0;
   let errores = 0;
 
   try {
@@ -343,105 +412,117 @@ export async function procesarRecordatoriosCron() {
       [ID_EMPRESA],
     );
 
+    const gruposPorCelular = new Map();
+
     for (const row of rows) {
+      const { id_credito, celular } = row;
+
+      if (!celular) continue;
+
+      // Normalizar fechas (evita errores por hora)
+      const dias = Math.round(
+        (new Date(row.fecha_vencimiento).setHours(0, 0, 0, 0) -
+          new Date(hoy).setHours(0, 0, 0, 0)) /
+          86400000,
+      );
+
+      const enviar = debeEnviarCreditoHoy({
+        diaSemana,
+        dias,
+        id_credito,
+      });
+
+      if (!enviar) continue;
+
+      const key = String(celular).trim();
+
+      if (!gruposPorCelular.has(key)) {
+        gruposPorCelular.set(key, {
+          celular: key,
+          nombre: row.nombre,
+          nombre_empresa: row.nombre_empresa,
+          cbu_alias: row.cbu_alias,
+          creditos: [],
+        });
+      }
+
+      gruposPorCelular.get(key).creditos.push({
+        id_credito,
+        dias,
+        total_deuda: row.total_deuda,
+      });
+    }
+
+    for (const grupo of gruposPorCelular.values()) {
       if (enviados >= LIMITE_ENVIO) {
         console.log(`⏹️ Límite de ${LIMITE_ENVIO} envíos alcanzado`);
         break;
       }
 
-      const { id_credito, celular, nombre, fecha_vencimiento, nombre_empresa } =
-        row;
+      const creditosLockeados = [];
 
-      // Normalizar fechas (evita errores por hora)
-      const dias = Math.round(
-        (new Date(fecha_vencimiento).setHours(0, 0, 0, 0) -
-          new Date(hoy).setHours(0, 0, 0, 0)) /
-          86400000,
-      );
+      for (const credito of grupo.creditos) {
+        const lockResult = await conn.query(
+          `
+          UPDATE creditos
+          SET recordatorio_lock = 1
+          WHERE id = ?
+            AND recordatorio_lock = 0
+          `,
+          [credito.id_credito],
+        );
 
-      const esUrgente = dias === 0 || dias === 1;
-
-      let enviar = false;
-
-      if (diaSemana === 0) {
-        // 🟣 DOMINGO → solo HOY o MAÑANA
-        if (esUrgente) {
-          enviar = true;
-        }
-      } else {
-        // 🟢 LUNES A SÁBADO
-        if (esUrgente) {
-          enviar = true;
-        } else {
-          const esPar = id_credito % 2 === 0;
-
-          if (
-            (esPar && [1, 3, 5].includes(diaSemana)) ||
-            (!esPar && [2, 4, 6].includes(diaSemana))
-          ) {
-            enviar = true;
-          }
+        if (lockResult.affectedRows === 1) {
+          creditosLockeados.push(credito);
         }
       }
 
-      if (!enviar) continue;
-
-      // 🔒 LOCK
-      const lockResult = await conn.query(
-        `
-        UPDATE creditos
-        SET recordatorio_lock = 1
-        WHERE id = ?
-          AND recordatorio_lock = 0
-        `,
-        [id_credito],
-      );
-
-      if (lockResult.affectedRows !== 1) continue;
+      if (!creditosLockeados.length) continue;
 
       try {
-        const mensaje = generarMensaje({
-          nombre,
-          dias,
-          id_credito,
-          total_deuda: row.total_deuda,
-          fecha_vencimiento: row.fecha_vencimiento,
-          id_empresa: ID_EMPRESA,
-          cbu_alias: row.cbu_alias,
+        const mensaje = generarMensajeAgrupado({
+          nombre: grupo.nombre,
+          creditos: creditosLockeados,
+          cbu_alias: grupo.cbu_alias,
         });
 
         let resul_envio = await enviar_mensaje({
-          to: celular,
+          to: grupo.celular,
           message: mensaje,
           id_operador: 0, // cron
         });
 
-        console.log(
-          resul_envio,
-          "Crédito:",
-          id_credito,
-          "Empresa:",
-          nombre_empresa,
-          "Cliente:",
-          nombre,
-        );
+        const idsNotificados = creditosLockeados.map((c) => c.id_credito);
 
         await conn.query(
           `
           UPDATE creditos
           SET recordatorio_update = NOW(),
               recordatorio_lock = 0
-          WHERE id = ?
+          WHERE id IN (?)
           `,
-          [id_credito],
+          [idsNotificados],
+        );
+
+        console.log(
+          resul_envio,
+          "Créditos:",
+          idsNotificados.join(","),
+          "Empresa:",
+          grupo.nombre_empresa,
+          "Cliente:",
+          grupo.nombre,
+          "Cel:",
+          grupo.celular,
         );
 
         enviados++;
+        creditosNotificados += idsNotificados.length;
         await sleep(700);
       } catch (err) {
         errores++;
-        logError(`❌ Error crédito ${id_credito}`, err, {
-          id_credito,
+        logError(`❌ Error celular ${grupo.celular}`, err, {
+          creditos: creditosLockeados.map((c) => c.id_credito),
           empresa: ID_EMPRESA,
         });
         // NO liberar → evita duplicados
@@ -449,7 +530,7 @@ export async function procesarRecordatoriosCron() {
     }
 
     console.log(
-      `📊 Cron → Empresa ${ID_EMPRESA} | Enviados: ${enviados} | Errores: ${errores}`,
+      `📊 Cron → Empresa ${ID_EMPRESA} | Mensajes: ${enviados} | Créditos notificados: ${creditosNotificados} | Errores: ${errores}`,
     );
   } catch (err) {
     logError("🔥 Error crítico en cron", err, { empresa: ID_EMPRESA });
