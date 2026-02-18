@@ -33,6 +33,42 @@ process.env.TZ = process.env.TZ || "UTC";
 const CRON_START_HOUR = Number(process.env.CRON_START_HOUR ?? 9);
 const CRON_END_HOUR = Number(process.env.CRON_END_HOUR ?? 20);
 const ID_EMPRESA = Number(process.env.ID_EMPRESA);
+const PROMO_FIN_DATE_UTC = Date.UTC(2026, 2, 1); // 2026-03-01 (exclusivo)
+
+function dateToUtcMidnight(date) {
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+function isSuperPromoVigente(date = new Date()) {
+  return dateToUtcMidnight(date) < PROMO_FIN_DATE_UTC;
+}
+
+function getSuperPromoCountdownText(date = new Date()) {
+  if (!isSuperPromoVigente(date)) return null;
+
+  const diasRestantes = Math.floor(
+    (PROMO_FIN_DATE_UTC - dateToUtcMidnight(date)) / 86400000,
+  );
+
+  const mensajes = {
+    10: "⏳ Faltan 10 días para aprovechar la Super Promo (vence el 28/02/2026).",
+    5: "⏳ Faltan 5 días para aprovechar la Super Promo (vence el 28/02/2026).",
+    3: "⏳ Faltan 3 días para aprovechar la Super Promo (vence el 28/02/2026).",
+    2: "⏳ Faltan 2 días para aprovechar la Super Promo (vence el 28/02/2026).",
+    1: "⚠️ Último día para aprovechar la Super Promo (vence hoy 28/02/2026).",
+  };
+
+  return mensajes[diasRestantes] ?? null;
+}
+
+function esCreditoElegibleSuperPromo({ dias, total_deuda, id_empresa }) {
+  return (
+    id_empresa === 1 &&
+    isSuperPromoVigente() &&
+    dias <= -20 &&
+    Number(total_deuda || 0) >= 200000
+  );
+}
 
 process.on("unhandledRejection", (reason) => {
   const err =
@@ -105,15 +141,20 @@ function generarMensaje({
 
     const diasVencido = Math.floor((hoy - fechaVenc) / 86400000);
 
-    // 🔥 PROMO CANCELATORIA (solo empresa 1)
-    if (id_empresa === 1 && diasVencido >= 20 && total_deuda >= 200000) {
+    // 🔥 PROMO CANCELATORIA (solo empresa 1, hasta 28/02/2026)
+    if (
+      esCreditoElegibleSuperPromo({
+        dias: -diasVencido,
+        total_deuda,
+        id_empresa,
+      })
+    ) {
       const promo = Math.round(total_deuda / 2);
+      const countdownPromo = getSuperPromoCountdownText();
 
       return heredoc`
         *SUPER PROMO CANCELATORIO* 🥳
         ${nombre}
-
-        *FELIZ 2026!* 🎉  
         Cancelá tu cuenta con el *50% de la deuda total*
 
         💰 Deuda actual: $${total_deuda.toLocaleString("es-AR")}
@@ -123,6 +164,7 @@ function generarMensaje({
         Alias: *LevsuMuebles.mp*
 
         🔒 _No se reciben pagos parciales para aplicar a la promoción_
+        ${countdownPromo ? `\n${countdownPromo}` : ""}
 
         👉 Ver resumen:
         ${link}
@@ -209,7 +251,12 @@ function debeEnviarCreditoHoy({ diaSemana, dias, id_credito }) {
   );
 }
 
-function generarMensajeAgrupado({ nombre, creditos, cbu_alias = null }) {
+function generarMensajeAgrupado({
+  nombre,
+  creditos,
+  cbu_alias = null,
+  id_empresa,
+}) {
   const formasPago = cbu_alias
     ? heredoc`
         *Formas de pago*
@@ -240,6 +287,23 @@ function generarMensajeAgrupado({ nombre, creditos, cbu_alias = null }) {
     })
     .join("\n\n");
 
+  const creditosPromo = creditos.filter((credito) =>
+    esCreditoElegibleSuperPromo({
+      dias: credito.dias,
+      total_deuda: credito.total_deuda,
+      id_empresa,
+    }),
+  );
+
+  const countdownPromo = getSuperPromoCountdownText();
+  const bloquePromo =
+    creditosPromo.length > 0 && countdownPromo
+      ? heredoc`
+          *SUPER PROMO CANCELATORIO* 🥳
+          ${countdownPromo}
+        `
+      : "";
+
   return heredoc`
     *RECORDATORIO*
     ${nombre}
@@ -247,6 +311,7 @@ function generarMensajeAgrupado({ nombre, creditos, cbu_alias = null }) {
     Tenés ${creditos.length} crédito(s) para revisar:
 
     ${resumenCreditos}
+    ${bloquePromo ? `\n${bloquePromo}` : ""}
 
     ${formasPago}
   `;
@@ -484,6 +549,7 @@ export async function procesarRecordatoriosCron() {
           nombre: grupo.nombre,
           creditos: creditosLockeados,
           cbu_alias: grupo.cbu_alias,
+          id_empresa: ID_EMPRESA,
         });
 
         let resul_envio = await enviar_mensaje({
