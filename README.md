@@ -31,6 +31,27 @@ Por defecto levanta en `http://localhost:3000`.
 - `POST /send`: envio de mensaje
 - `POST /run-cron-now`: ejecucion manual del cron
 
+## Manejo de sesiones perdidas
+
+Cuando WhatsApp devuelve `loggedOut` (por ejemplo `401`), el servicio ahora:
+
+- marca estado `session_lost`
+- limpia `./sessions` automaticamente
+- reintenta iniciar para generar nuevo QR
+
+Estados SSE relevantes en `GET /qr`:
+
+- `connected`
+- `qr`
+- `disconnected`
+- `reconnecting` (incluye `attempt` y `delayMs`)
+- `session_lost` (incluye `requiresQr: true`)
+
+Variables opcionales:
+
+- `WA_SESSION_PATH` (default `./sessions`)
+- `WA_RECONNECT_DELAY_MS` (default `5000`)
+
 ## Seguridad para repositorio publico
 
 Este proyecto ignora por defecto:
