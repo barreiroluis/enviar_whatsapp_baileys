@@ -1,6 +1,6 @@
 import { getSock } from "../whatsapp.js";
 import { saveMessageMysql } from "../adapter/mysql.js";
-import { cleanNumber, jidToPhone } from "../utils/cleanNumber.js";
+import { cleanNumber, jidToPhone, toCrmJid } from "../utils/cleanNumber.js";
 import { getMediaTypeFromUrl, getFileNameFromUrl } from "../utils/media.js";
 
 export async function enviar_mensaje({
@@ -34,6 +34,13 @@ export async function enviar_mensaje({
     throw new Error("Número inválido");
   }
 
+  const fromCrmContact = toCrmJid(fromJid);
+  const toCrmContact = toCrmJid(toJid);
+
+  if (!fromCrmContact || !toCrmContact) {
+    throw new Error("Número inválido");
+  }
+
   // 📎 Media (pendiente)
   let sentMessage;
 
@@ -64,8 +71,8 @@ export async function enviar_mensaje({
   // 💾 Guardar SOLO lo que manda el sistema
   if (process.env.DATABASE === "mysql") {
     await saveMessageMysql(
-      fromPhone,
-      toPhone,
+      fromCrmContact,
+      toCrmContact,
       message.trim(),
       null,
       id_msg,

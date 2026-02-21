@@ -36,8 +36,28 @@ export function cleanNumber(number) {
     return digits ? `${digits}@s.whatsapp.net` : null;
   }
 
+  if (value.endsWith("@lid")) {
+    const digits = jidToPhone(value);
+    return digits ? `${digits}@lid` : null;
+  }
+
   const digits = jidToPhone(value);
   if (!digits) return null;
 
   return `${digits}@s.whatsapp.net`;
+}
+
+export function toCrmJid(numberOrJid) {
+  if (!numberOrJid) return null;
+
+  const value = String(numberOrJid).trim();
+
+  if (value.endsWith("@lid")) {
+    const digits = jidToPhone(value);
+    return digits ? `${digits}@lid` : null;
+  }
+
+  const digits = jidToPhone(value);
+  if (!digits) return null;
+  return `${digits}@c.us`;
 }
