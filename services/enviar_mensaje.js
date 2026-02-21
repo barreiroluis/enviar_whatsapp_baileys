@@ -1,6 +1,6 @@
 import { getSock } from "../whatsapp.js";
 import { saveMessageMysql } from "../adapter/mysql.js";
-import { cleanNumber } from "../utils/cleanNumber.js";
+import { cleanNumber, jidToPhone } from "../utils/cleanNumber.js";
 import { getMediaTypeFromUrl, getFileNameFromUrl } from "../utils/media.js";
 
 export async function enviar_mensaje({
@@ -23,7 +23,14 @@ export async function enviar_mensaje({
   const fromJid = cleanNumber(sock.user.id.split(":")[0]);
   const toJid = cleanNumber(to);
 
-  if (!toJid) {
+  if (!fromJid || !toJid) {
+    throw new Error("Número inválido");
+  }
+
+  const fromPhone = jidToPhone(fromJid);
+  const toPhone = jidToPhone(toJid);
+
+  if (!fromPhone || !toPhone) {
     throw new Error("Número inválido");
   }
 
@@ -57,8 +64,8 @@ export async function enviar_mensaje({
   // 💾 Guardar SOLO lo que manda el sistema
   if (process.env.DATABASE === "mysql") {
     await saveMessageMysql(
-      fromJid.replace("@s.whatsapp.net", ""), // guardar limpio como antes
-      toJid.replace("@s.whatsapp.net", ""),
+      fromPhone,
+      toPhone,
       message.trim(),
       null,
       id_msg,
