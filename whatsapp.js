@@ -1,7 +1,6 @@
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
-  fetchLatestWaWebVersion,
 } from "@whiskeysockets/baileys";
 import { rm } from "node:fs/promises";
 import Pino from "pino";
@@ -18,7 +17,16 @@ const BASE_RECONNECT_DELAY_MS = Number(
   process.env.WA_RECONNECT_DELAY_MS || 5000,
 );
 const MAX_RECONNECT_DELAY_MS = 60000;
+const MAX_RECONNECT_ATTEMPTS = Number(
+  process.env.WA_MAX_RECONNECT_ATTEMPTS || 8,
+);
+const RECONNECT_COOLDOWN_MS = Number(
+  process.env.WA_RECONNECT_COOLDOWN_MS || 300000,
+);
+const RECONNECT_JITTER_RATIO = 0.2;
+const WA_SOCKET_VERSION = [2, 3000, 1033893291];
 const qrClients = new Set(); // clientes SSE
+let reconnectCooldownUntil = 0;
 
 export async function initWhatsApp() {
   if (isInitializing) return;
@@ -26,25 +34,15 @@ export async function initWhatsApp() {
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
-    const waVersionResult = await fetchLatestWaWebVersion();
-    const waVersion = waVersionResult.version;
-
-    if (!waVersionResult.isLatest) {
-      logError(
-        "⚠️ No se pudo obtener la última versión de WA Web, usando fallback de Baileys",
-        waVersionResult.error,
-        { version: waVersion.join(".") },
-      );
-    } else {
-      console.log(`🧩 WA Web version: ${waVersion.join(".")}`);
-    }
+    console.log(`🧩 WA version fija: ${WA_SOCKET_VERSION.join(".")}`);
 
     sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      version: waVersion,
-      logger: Pino({ level: "fatal" }),
+      version: WA_SOCKET_VERSION,
+      logger: Pino({ level: "info" }),
       syncFullHistory: false,
+      browser: ["Windows", "Google Chrome", "145.0.0"],
     });
 
     sock.ev.on("creds.update", saveCreds);
@@ -63,6 +61,7 @@ export async function initWhatsApp() {
           connectionStatus = "connected";
           currentQR = null;
           reconnectAttempts = 0;
+          reconnectCooldownUntil = 0;
           clearReconnectTimeout();
           console.log("✅ WhatsApp conectado");
           notifyQRClients({ status: "connected" });
@@ -96,6 +95,7 @@ export async function initWhatsApp() {
             });
           }
 
+          sock = null;
           scheduleReconnect({ reason, immediate: isSessionLost });
         }
       },
@@ -178,13 +178,55 @@ function clearReconnectTimeout() {
 function scheduleReconnect({ reason = "unknown", immediate = false } = {}) {
   if (reconnectTimeout) return;
 
+  const now = Date.now();
+
+  if (reconnectCooldownUntil > now) {
+    const pendingMs = reconnectCooldownUntil - now;
+    console.log(
+      `🧊 Cooldown activo. Reintento pausado por ${pendingMs}ms (reason: ${reason})`,
+    );
+    reconnectTimeout = setTimeout(() => {
+      reconnectTimeout = null;
+      initWhatsApp().catch((err) => {
+        logError("❌ Error al reconectar WhatsApp tras cooldown", err);
+        scheduleReconnect({ reason: "cooldown_init_error" });
+      });
+    }, pendingMs);
+    return;
+  }
+
   reconnectAttempts += 1;
-  const delay = immediate
+
+  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    reconnectAttempts = 0;
+    reconnectCooldownUntil = now + RECONNECT_COOLDOWN_MS;
+    console.log(
+      `🧊 Máximo de reintentos alcanzado. Entrando en cooldown de ${RECONNECT_COOLDOWN_MS}ms`,
+    );
+    notifyQRClients({
+      status: "reconnect_cooldown",
+      reason,
+      delayMs: RECONNECT_COOLDOWN_MS,
+    });
+    scheduleReconnect({ reason: "cooldown" });
+    return;
+  }
+
+  const baseDelay = immediate
     ? 1000
     : Math.min(
         BASE_RECONNECT_DELAY_MS * 2 ** (reconnectAttempts - 1),
         MAX_RECONNECT_DELAY_MS,
       );
+  const jitter =
+    immediate || baseDelay <= 1000
+      ? 0
+      : Math.floor(
+          baseDelay *
+            (Math.random() * RECONNECT_JITTER_RATIO * 2 -
+              RECONNECT_JITTER_RATIO),
+        );
+  const delay = Math.max(1000, baseDelay + jitter);
 
   console.log(
     `♻️ Reintentando conexión en ${delay}ms (intento ${reconnectAttempts}, reason: ${reason})`,
