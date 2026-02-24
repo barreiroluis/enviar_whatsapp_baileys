@@ -16,7 +16,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0",
+    "@whiskeysockets/baileys": "latest",
     "dotenv": "^17.2.3",
     "express": "^4.19.2",
     "moment-timezone": "^0.6.0",

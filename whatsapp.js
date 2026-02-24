@@ -1,6 +1,7 @@
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
+  fetchLatestWaWebVersion,
 } from "@whiskeysockets/baileys";
 import { rm } from "node:fs/promises";
 import Pino from "pino";
@@ -17,7 +18,6 @@ const BASE_RECONNECT_DELAY_MS = Number(
   process.env.WA_RECONNECT_DELAY_MS || 5000,
 );
 const MAX_RECONNECT_DELAY_MS = 60000;
-const WA_SOCKET_VERSION = [2, 3000, 1033893291];
 const qrClients = new Set(); // clientes SSE
 
 export async function initWhatsApp() {
@@ -26,65 +26,80 @@ export async function initWhatsApp() {
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
+    const waVersionResult = await fetchLatestWaWebVersion();
+    const waVersion = waVersionResult.version;
+
+    if (!waVersionResult.isLatest) {
+      logError(
+        "⚠️ No se pudo obtener la última versión de WA Web, usando fallback de Baileys",
+        waVersionResult.error,
+        { version: waVersion.join(".") },
+      );
+    } else {
+      console.log(`🧩 WA Web version: ${waVersion.join(".")}`);
+    }
 
     sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      version: WA_SOCKET_VERSION,
-      logger: Pino({ level: "info" }),
+      version: waVersion,
+      logger: Pino({ level: "fatal" }),
       syncFullHistory: false,
     });
 
     sock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
-      if (qr) {
-        currentQR = qr;
-        connectionStatus = "qr";
-        console.log("🔄 Nuevo QR generado");
-        notifyQRClients({ status: "qr", qr });
-      }
-
-      if (connection === "open") {
-        connectionStatus = "connected";
-        currentQR = null;
-        reconnectAttempts = 0;
-        clearReconnectTimeout();
-        console.log("✅ WhatsApp conectado");
-        notifyQRClients({ status: "connected" });
-      }
-
-      if (connection === "close") {
-        connectionStatus = "disconnected";
-        const statusCode = lastDisconnect?.error?.output?.statusCode;
-        const reason =
-          statusCode !== undefined ? DisconnectReason[statusCode] : "unknown";
-        const isSessionLost =
-          statusCode === DisconnectReason.loggedOut || reason === "loggedOut";
-
-        logError(
-          "⚠️ WhatsApp desconectado",
-          lastDisconnect?.error || new Error("Desconectado"),
-          { statusCode, reason },
-        );
-
-        notifyQRClients({ status: "disconnected", reason });
-
-        if (isSessionLost) {
-          connectionStatus = "session_lost";
-          currentQR = null;
-          clearReconnectTimeout();
-          await clearSessionFiles();
-          notifyQRClients({
-            status: "session_lost",
-            reason,
-            requiresQr: true,
-          });
+    sock.ev.on(
+      "connection.update",
+      async ({ connection, lastDisconnect, qr }) => {
+        if (qr) {
+          currentQR = qr;
+          connectionStatus = "qr";
+          console.log("🔄 Nuevo QR generado");
+          notifyQRClients({ status: "qr", qr });
         }
 
-        scheduleReconnect({ reason, immediate: isSessionLost });
-      }
-    });
+        if (connection === "open") {
+          connectionStatus = "connected";
+          currentQR = null;
+          reconnectAttempts = 0;
+          clearReconnectTimeout();
+          console.log("✅ WhatsApp conectado");
+          notifyQRClients({ status: "connected" });
+        }
+
+        if (connection === "close") {
+          connectionStatus = "disconnected";
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          const reason =
+            statusCode !== undefined ? DisconnectReason[statusCode] : "unknown";
+          const isSessionLost =
+            statusCode === DisconnectReason.loggedOut || reason === "loggedOut";
+
+          logError(
+            "⚠️ WhatsApp desconectado",
+            lastDisconnect?.error || new Error("Desconectado"),
+            { statusCode, reason },
+          );
+
+          notifyQRClients({ status: "disconnected", reason });
+
+          if (isSessionLost) {
+            connectionStatus = "session_lost";
+            currentQR = null;
+            clearReconnectTimeout();
+            await clearSessionFiles();
+            notifyQRClients({
+              status: "session_lost",
+              reason,
+              requiresQr: true,
+            });
+          }
+
+          scheduleReconnect({ reason, immediate: isSessionLost });
+        }
+      },
+    );
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type !== "notify") return;
