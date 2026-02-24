@@ -1,4 +1,4 @@
-import { getSock, isWhatsAppConnected } from "../whatsapp.js";
+import { getSock } from "../whatsapp.js";
 import { saveMessageMysql } from "../adapter/mysql.js";
 import { cleanNumber, jidToPhone, toCrmJid } from "../utils/cleanNumber.js";
 import { getMediaTypeFromUrl, getFileNameFromUrl } from "../utils/media.js";
@@ -11,7 +11,7 @@ export async function enviar_mensaje({
 }) {
   const sock = getSock();
 
-  if (!sock || !sock.user || !isWhatsAppConnected()) {
+  if (!sock || !sock.user) {
     throw new Error("WhatsApp no conectado");
   }
 

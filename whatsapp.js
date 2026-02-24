@@ -12,7 +12,6 @@ let connectionStatus = "disconnected";
 let reconnectTimeout = null;
 let reconnectAttempts = 0;
 let isInitializing = false;
-let activeSocketId = 0;
 const SESSION_PATH = process.env.WA_SESSION_PATH || "./sessions";
 const BASE_RECONNECT_DELAY_MS = Number(
   process.env.WA_RECONNECT_DELAY_MS || 5000,
@@ -27,77 +26,67 @@ export async function initWhatsApp() {
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
-    const waVersion = WA_SOCKET_VERSION;
-    console.log(`🧩 WA version fija: ${waVersion.join(".")}`);
-    const socketId = ++activeSocketId;
-    const nextSock = makeWASocket({
+
+    sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      version: waVersion,
-      logger: Pino({ level: "fatal" }),
+      version: WA_SOCKET_VERSION,
+      logger: Pino({ level: "info" }),
       syncFullHistory: false,
     });
-    sock = nextSock;
 
-    nextSock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", saveCreds);
 
-    nextSock.ev.on(
-      "connection.update",
-      async ({ connection, lastDisconnect, qr }) => {
-        if (socketId !== activeSocketId || sock !== nextSock) return;
+    sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
+      if (qr) {
+        currentQR = qr;
+        connectionStatus = "qr";
+        console.log("🔄 Nuevo QR generado");
+        notifyQRClients({ status: "qr", qr });
+      }
 
-        if (qr) {
-          currentQR = qr;
-          connectionStatus = "qr";
-          console.log("🔄 Nuevo QR generado");
-          notifyQRClients({ status: "qr", qr });
-        }
+      if (connection === "open") {
+        connectionStatus = "connected";
+        currentQR = null;
+        reconnectAttempts = 0;
+        clearReconnectTimeout();
+        console.log("✅ WhatsApp conectado");
+        notifyQRClients({ status: "connected" });
+      }
 
-        if (connection === "open") {
-          connectionStatus = "connected";
+      if (connection === "close") {
+        connectionStatus = "disconnected";
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const reason =
+          statusCode !== undefined ? DisconnectReason[statusCode] : "unknown";
+        const isSessionLost =
+          statusCode === DisconnectReason.loggedOut || reason === "loggedOut";
+
+        logError(
+          "⚠️ WhatsApp desconectado",
+          lastDisconnect?.error || new Error("Desconectado"),
+          { statusCode, reason },
+        );
+
+        notifyQRClients({ status: "disconnected", reason });
+
+        if (isSessionLost) {
+          connectionStatus = "session_lost";
           currentQR = null;
-          reconnectAttempts = 0;
           clearReconnectTimeout();
-          console.log("✅ WhatsApp conectado");
-          notifyQRClients({ status: "connected" });
+          await clearSessionFiles();
+          notifyQRClients({
+            status: "session_lost",
+            reason,
+            requiresQr: true,
+          });
         }
 
-        if (connection === "close") {
-          connectionStatus = "disconnected";
-          const statusCode = lastDisconnect?.error?.output?.statusCode;
-          const reason =
-            statusCode !== undefined ? DisconnectReason[statusCode] : "unknown";
-          const isSessionLost =
-            statusCode === DisconnectReason.loggedOut || reason === "loggedOut";
+        scheduleReconnect({ reason, immediate: isSessionLost });
+      }
+    });
 
-          logError(
-            "⚠️ WhatsApp desconectado",
-            lastDisconnect?.error || new Error("Desconectado"),
-            { statusCode, reason },
-          );
-
-          notifyQRClients({ status: "disconnected", reason });
-
-          if (isSessionLost) {
-            connectionStatus = "session_lost";
-            currentQR = null;
-            clearReconnectTimeout();
-            await clearSessionFiles();
-            notifyQRClients({
-              status: "session_lost",
-              reason,
-              requiresQr: true,
-            });
-          }
-
-          sock = null;
-          scheduleReconnect({ reason, immediate: isSessionLost });
-        }
-      },
-    );
-
-    nextSock.ev.on("messages.upsert", async ({ messages, type }) => {
-      if (socketId !== activeSocketId || sock !== nextSock) return;
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type !== "notify") return;
 
       const msg = messages[0];
@@ -132,24 +121,14 @@ export function getSock() {
   return sock;
 }
 
-export function getConnectionStatus() {
-  return connectionStatus;
-}
-
-export function isWhatsAppConnected() {
-  return connectionStatus === "connected" && Boolean(sock?.user);
-}
-
 /* ===== SSE helpers ===== */
 
 export function addQRClient(res) {
   qrClients.add(res);
 
   // enviar estado actual al conectar (evita quedarse en "listening")
-  if (connectionStatus === "connected") {
+  if (sock?.user || connectionStatus === "connected") {
     res.write(`data: ${JSON.stringify({ status: "connected" })}\n\n`);
-  } else if (connectionStatus === "reconnecting") {
-    res.write(`data: ${JSON.stringify({ status: "reconnecting" })}\n\n`);
   } else if (connectionStatus === "session_lost") {
     res.write(
       `data: ${JSON.stringify({ status: "session_lost", requiresQr: true })}\n\n`,
@@ -170,11 +149,7 @@ export function addQRClient(res) {
 
 function notifyQRClients(data) {
   for (const client of qrClients) {
-    try {
-      client.write(`data: ${JSON.stringify(data)}\n\n`);
-    } catch {
-      qrClients.delete(client);
-    }
+    client.write(`data: ${JSON.stringify(data)}\n\n`);
   }
 }
 
@@ -186,9 +161,8 @@ function clearReconnectTimeout() {
 }
 
 function scheduleReconnect({ reason = "unknown", immediate = false } = {}) {
-  if (reconnectTimeout || isInitializing) return;
+  if (reconnectTimeout) return;
 
-  connectionStatus = "reconnecting";
   reconnectAttempts += 1;
   const delay = immediate
     ? 1000
