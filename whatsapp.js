@@ -1,7 +1,6 @@
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
-  fetchLatestBaileysVersion,
 } from "@whiskeysockets/baileys";
 import { rm } from "node:fs/promises";
 import Pino from "pino";
@@ -14,12 +13,12 @@ let reconnectTimeout = null;
 let reconnectAttempts = 0;
 let isInitializing = false;
 let activeSocketId = 0;
-let cachedSocketVersion = null;
 const SESSION_PATH = process.env.WA_SESSION_PATH || "./sessions";
 const BASE_RECONNECT_DELAY_MS = Number(
   process.env.WA_RECONNECT_DELAY_MS || 5000,
 );
 const MAX_RECONNECT_DELAY_MS = 60000;
+const WA_SOCKET_VERSION = [2, 3000, 1033893291];
 const qrClients = new Set(); // clientes SSE
 
 export async function initWhatsApp() {
@@ -28,7 +27,8 @@ export async function initWhatsApp() {
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
-    const waVersion = await resolveSocketVersion();
+    const waVersion = WA_SOCKET_VERSION;
+    console.log(`🧩 WA version fija: ${waVersion.join(".")}`);
     const socketId = ++activeSocketId;
     const nextSock = makeWASocket({
       auth: state,
@@ -214,59 +214,6 @@ function scheduleReconnect({ reason = "unknown", immediate = false } = {}) {
       scheduleReconnect({ reason: "init_error" });
     });
   }, delay);
-}
-
-function parseVersion(raw) {
-  if (!raw) return null;
-
-  const parts = String(raw)
-    .split(/[\s,./-]+/)
-    .map((v) => Number(v))
-    .filter((v) => Number.isFinite(v));
-
-  if (
-    parts.length !== 3 ||
-    parts.some((v) => !Number.isInteger(v) || v <= 0)
-  ) {
-    return null;
-  }
-
-  return [parts[0], parts[1], parts[2]];
-}
-
-async function resolveSocketVersion() {
-  if (cachedSocketVersion) return cachedSocketVersion;
-
-  const envVersion = parseVersion(process.env.WA_VERSION);
-
-  if (envVersion) {
-    cachedSocketVersion = envVersion;
-    console.log(`🧩 WA version fija por WA_VERSION: ${envVersion.join(".")}`);
-    return cachedSocketVersion;
-  }
-
-  if (process.env.WA_VERSION) {
-    logError(
-      "⚠️ WA_VERSION inválida, se ignora",
-      new Error("Formato esperado: X.Y.Z o X,Y,Z"),
-      { value: process.env.WA_VERSION },
-    );
-  }
-
-  const versionResult = await fetchLatestBaileysVersion();
-  cachedSocketVersion = versionResult.version;
-
-  if (!versionResult.isLatest) {
-    logError(
-      "⚠️ No se pudo obtener última versión recomendada de Baileys, usando fallback",
-      versionResult.error,
-      { version: cachedSocketVersion.join(".") },
-    );
-  } else {
-    console.log(`🧩 Baileys version recomendada: ${cachedSocketVersion.join(".")}`);
-  }
-
-  return cachedSocketVersion;
 }
 
 async function clearSessionFiles() {
