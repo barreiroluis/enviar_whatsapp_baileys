@@ -1,5 +1,5 @@
 import express from "express";
-import { getSock, addQRClient } from "./whatsapp.js";
+import { addQRClient, isWhatsAppConnected } from "./whatsapp.js";
 import { enviar_mensaje } from "./services/enviar_mensaje.js";
 import { procesarRecordatoriosCron } from "./index.js";
 import { logError } from "./utils/logger.js";
@@ -61,7 +61,7 @@ const sendWithApi = async (req, res) => {
       });
     }
 
-    if (!getSock()?.user) {
+    if (!isWhatsAppConnected()) {
       return res.status(503).json({
         ok: false,
         msg: "WhatsApp no conectado",
@@ -92,9 +92,7 @@ const sendWithApi = async (req, res) => {
 app.post("/send", sendWithApi);
 
 app.post("/run-cron-now", async (req, res) => {
-  const sock = getSock();
-
-  if (!sock?.user) {
+  if (!isWhatsAppConnected()) {
     return res.status(400).json({
       ok: false,
       msg: "WhatsApp no conectado",
