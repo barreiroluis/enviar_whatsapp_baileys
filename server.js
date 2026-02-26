@@ -27,10 +27,18 @@ app.get("/qr", (req, res) => {
 /* 📤 Handler de envío */
 const sendWithApi = async (req, res) => {
   const { to, message, adjunto } = req.body;
+  const respondSend = (status, payload) => {
+    console.log("📡 Respuesta /send", {
+      status,
+      payload,
+      timestamp: new Date().toISOString(),
+    });
+    return res.status(status).json(payload);
+  };
 
   try {
     if (!to || !message) {
-      return res.status(400).json({
+      return respondSend(400, {
         ok: false,
         msg: "Faltan parámetros",
       });
@@ -39,14 +47,14 @@ const sendWithApi = async (req, res) => {
     const cleanMessage = message.trim();
 
     if (!cleanMessage) {
-      return res.status(400).json({
+      return respondSend(400, {
         ok: false,
         msg: "Mensaje vacío",
       });
     }
 
     if (message.length > 4000) {
-      return res.status(400).json({
+      return respondSend(400, {
         ok: false,
         msg: "Mensaje demasiado largo",
       });
@@ -55,14 +63,14 @@ const sendWithApi = async (req, res) => {
     const toJid = cleanNumber(to);
 
     if (!toJid) {
-      return res.status(400).json({
+      return respondSend(400, {
         ok: false,
         msg: "Número inválido",
       });
     }
 
     if (!getSock()?.user) {
-      return res.status(503).json({
+      return respondSend(503, {
         ok: false,
         msg: "WhatsApp no conectado",
       });
@@ -76,14 +84,14 @@ const sendWithApi = async (req, res) => {
       source: "api-post",
     });
 
-    res.json({
+    return respondSend(200, {
       ok: true,
       msg: result.msg, // "Whatsapp Enviado"
       id_msg: result.id_msg,
     });
   } catch (error) {
     logError("❌ Error en /send", error, { to });
-    res.status(500).json({
+    return respondSend(500, {
       ok: false,
       msg: error.message,
     });
