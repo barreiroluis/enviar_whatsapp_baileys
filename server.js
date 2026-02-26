@@ -77,7 +77,8 @@ const sendWithApi = async (req, res) => {
 
     res.json({
       ok: true,
-      msg: result, // "Whatsapp Enviado"
+      msg: result.msg, // "Whatsapp Enviado"
+      id_msg: result.id_msg,
     });
   } catch (error) {
     logError("❌ Error en /send", error, { to });

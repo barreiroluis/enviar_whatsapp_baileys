@@ -66,7 +66,7 @@ export async function enviar_mensaje({
     });
   }
 
-  const id_msg = sentMessage?.key?.id || "";
+  const id_msg = sentMessage?.key?.id || null;
 
   // 💾 Guardar SOLO lo que manda el sistema
   if (process.env.DATABASE === "mysql") {
@@ -81,5 +81,8 @@ export async function enviar_mensaje({
     );
   }
 
-  return "Whatsapp Enviado";
+  return {
+    msg: "Whatsapp Enviado",
+    id_msg,
+  };
 }
