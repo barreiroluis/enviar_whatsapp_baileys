@@ -3,6 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <title>QR WhatsApp</title>
+    <style>
+      body {
+        font-family: sans-serif;
+      }
+
+      #status {
+        margin-bottom: 12px;
+      }
+
+      #qr {
+        width: 300px;
+        height: 300px;
+        border: 1px solid #ddd;
+        display: none;
+      }
+    </style>
   </head>
   <body>
     <h2>QR WhatsApp</h2>
@@ -17,19 +33,58 @@
       // ej: http://85.209.95.27:30000
 
       const evtSource = new EventSource(`${baseURL}/qr`);
+
+      function setStatus(text) {
+        status.innerText = text;
+      }
+
+      function showQr(qrValue) {
+        qrImg.src =
+          "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" +
+          encodeURIComponent(qrValue);
+        qrImg.style.display = "block";
+      }
+
+      function hideQr() {
+        qrImg.style.display = "none";
+      }
+
       evtSource.onmessage = (event) => {
         const data = JSON.parse(event.data);
 
         if (data.qr) {
-          qrImg.src =
-            "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" +
-            encodeURIComponent(data.qr);
+          showQr(data.qr);
+          setStatus("📷 Escaneá el QR con WhatsApp");
         }
 
         if (data.status === "connected") {
-          status.innerText = "✅ WhatsApp conectado";
-          qrImg.remove();
+          setStatus("✅ WhatsApp conectado");
+          hideQr();
+          return;
         }
+
+        if (data.status === "qr" || data.status === "session_lost") {
+          setStatus("📷 Escaneá el QR con WhatsApp");
+          return;
+        }
+
+        if (data.status === "reconnecting") {
+          setStatus("♻️ Reconectando WhatsApp...");
+          return;
+        }
+
+        if (data.status === "disconnected") {
+          setStatus("⚠️ WhatsApp desconectado. Esperando QR...");
+          return;
+        }
+
+        if (data.status === "listening") {
+          setStatus("👂 Esperando estado de WhatsApp...");
+        }
+      };
+
+      evtSource.onerror = () => {
+        setStatus("❌ Sin conexión con el servidor SSE (/qr)");
       };
     </script>
   </body>

@@ -43,6 +43,9 @@ export async function initWhatsApp() {
       logger: Pino({ level: "info" }),
       syncFullHistory: false,
       browser: ["Windows", "Google Chrome", "145.0.0"],
+      fireInitQueries: false,
+      shouldSyncHistoryMessage: () => false,
+      shouldIgnoreJid: (jid) => jid === "status@broadcast",
     });
 
     sock.ev.on("creds.update", saveCreds);
