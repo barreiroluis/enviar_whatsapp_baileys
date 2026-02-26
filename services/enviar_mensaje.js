@@ -8,6 +8,7 @@ export async function enviar_mensaje({
   message,
   adjunto = null,
   id_operador = 0, // cron = 0
+  source = "system",
 }) {
   const sock = getSock();
 
@@ -67,6 +68,15 @@ export async function enviar_mensaje({
   }
 
   const id_msg = sentMessage?.key?.id || null;
+
+  console.log("📤 Mensaje enviado", {
+    source,
+    to: toCrmContact,
+    id_msg,
+    adjunto: Boolean(adjunto),
+    message: message.trim(),
+    timestamp: new Date().toISOString(),
+  });
 
   // 💾 Guardar SOLO lo que manda el sistema
   if (process.env.DATABASE === "mysql") {

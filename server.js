@@ -73,6 +73,7 @@ const sendWithApi = async (req, res) => {
       message: cleanMessage,
       adjunto,
       id_operador: 0, // cron / sistema
+      source: "api-post",
     });
 
     res.json({

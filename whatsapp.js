@@ -25,6 +25,7 @@ const RECONNECT_COOLDOWN_MS = Number(
 );
 const RECONNECT_JITTER_RATIO = 0.2;
 const WA_SOCKET_VERSION = [2, 3000, 1033893291];
+const WA_BAILEYS_LOG_LEVEL = process.env.WA_BAILEYS_LOG_LEVEL || "silent";
 const qrClients = new Set(); // clientes SSE
 let reconnectCooldownUntil = 0;
 
@@ -40,7 +41,7 @@ export async function initWhatsApp() {
       auth: state,
       printQRInTerminal: false,
       version: WA_SOCKET_VERSION,
-      logger: Pino({ level: "info" }),
+      logger: Pino({ level: WA_BAILEYS_LOG_LEVEL }),
       syncFullHistory: false,
       browser: ["Windows", "Google Chrome", "145.0.0"],
       fireInitQueries: false,

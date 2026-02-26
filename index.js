@@ -1,22 +1,3 @@
-// 🔇 Filtro global de logs ruidosos de Baileys / Signal
-const originalLog = console.log;
-
-console.log = (...args) => {
-  const msg = args.join(" ");
-
-  if (
-    msg.includes("Closing session") ||
-    msg.includes("SessionEntry") ||
-    msg.includes("pendingPreKey") ||
-    msg.includes("remoteIdentityKey") ||
-    msg.includes("baseKeyType")
-  ) {
-    return;
-  }
-
-  originalLog(...args);
-};
-
 // ⚠️ dotenv primero
 import "dotenv/config";
 
@@ -26,7 +7,9 @@ import { enviar_mensaje } from "./services/enviar_mensaje.js";
 
 import cron from "node-cron";
 import { getConnectionWithRelease } from "./database.js";
-import { logError } from "./utils/logger.js";
+import { logError, setupConsoleLogging } from "./utils/logger.js";
+
+setupConsoleLogging();
 
 const PORT = process.env.PORT || 3000;
 process.env.TZ = process.env.TZ || "UTC";
@@ -556,6 +539,7 @@ export async function procesarRecordatoriosCron() {
           to: grupo.celular,
           message: mensaje,
           id_operador: 0, // cron
+          source: "cron",
         });
 
         const idsNotificados = creditosLockeados.map((c) => c.id_credito);
