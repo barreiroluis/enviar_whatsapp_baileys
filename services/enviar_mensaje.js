@@ -1,6 +1,7 @@
 import { getSock } from "../whatsapp.js";
 import { saveMessageMysql } from "../adapter/mysql.js";
 import { cleanNumber, jidToPhone, toCrmJid } from "../utils/cleanNumber.js";
+import { getCurrentDateTime } from "../utils/date.js";
 import { getMediaTypeFromUrl, getFileNameFromUrl } from "../utils/media.js";
 
 export async function enviar_mensaje({
@@ -75,7 +76,8 @@ export async function enviar_mensaje({
     id_msg,
     adjunto: Boolean(adjunto),
     message: message.trim(),
-    timestamp: new Date().toISOString(),
+    timestamp: getCurrentDateTime(),
+    timezone: process.env.TZ || "America/Argentina/Buenos_Aires",
   });
 
   // 💾 Guardar SOLO lo que manda el sistema

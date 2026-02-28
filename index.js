@@ -6,13 +6,15 @@ import { initWhatsApp, getSock } from "./whatsapp.js";
 import { enviar_mensaje } from "./services/enviar_mensaje.js";
 
 import cron from "node-cron";
+import moment from "moment-timezone";
 import { getConnectionWithRelease } from "./database.js";
 import { logError, setupConsoleLogging } from "./utils/logger.js";
 
 setupConsoleLogging();
 
 const PORT = process.env.PORT || 3000;
-process.env.TZ = process.env.TZ || "UTC";
+const APP_TIME_ZONE = process.env.TZ || "America/Argentina/Buenos_Aires";
+process.env.TZ = APP_TIME_ZONE;
 const CRON_START_HOUR = Number(process.env.CRON_START_HOUR ?? 9);
 const CRON_END_HOUR = Number(process.env.CRON_END_HOUR ?? 20);
 const ID_EMPRESA = Number(process.env.ID_EMPRESA);
@@ -68,18 +70,22 @@ process.on("uncaughtException", (err) => {
 let cronRunning = false;
 
 // 🕒 CRON cada 30 minutos
-cron.schedule("*/30 * * * *", async () => {
-  const sock = getSock();
+cron.schedule(
+  "*/30 * * * *",
+  async () => {
+    const sock = getSock();
 
-  if (cronRunning || !sock?.user) return;
+    if (cronRunning || !sock?.user) return;
 
-  cronRunning = true;
-  try {
-    await procesarRecordatoriosCron();
-  } finally {
-    cronRunning = false;
-  }
-});
+    cronRunning = true;
+    try {
+      await procesarRecordatoriosCron();
+    } finally {
+      cronRunning = false;
+    }
+  },
+  { timezone: APP_TIME_ZONE },
+);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -322,9 +328,7 @@ function parseDbBoolean(value) {
   if (value == null) return false;
 
   const normalized = String(value).trim().toLowerCase();
-  return ["1", "true", "t", "si", "sí", "on", "yes", "y"].includes(
-    normalized,
-  );
+  return ["1", "true", "t", "si", "sí", "on", "yes", "y"].includes(normalized);
 }
 
 async function isCronRecordatorioEnabledForEmpresa(conn, idEmpresa) {
@@ -350,12 +354,12 @@ async function isCronRecordatorioEnabledForEmpresa(conn, idEmpresa) {
  * Ejecutar desde cron cada 30 minutos
  */
 export async function procesarRecordatoriosCron() {
-  const ahora = new Date();
-  const hora = ahora.getHours(); // 0–23
+  const ahora = moment.tz(APP_TIME_ZONE);
+  const hora = ahora.hour(); // 0–23
 
   let conn;
-  const hoy = new Date();
-  const diaSemana = hoy.getDay(); // 0=Domingo
+  const hoy = ahora.clone().startOf("day").toDate();
+  const diaSemana = ahora.day(); // 0=Domingo
   const LIMITE_ENVIO = 50;
 
   let enviados = 0;
