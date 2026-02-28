@@ -8,12 +8,20 @@ import { enviar_mensaje } from "./services/enviar_mensaje.js";
 import cron from "node-cron";
 import moment from "moment-timezone";
 import { getConnectionWithRelease } from "./database.js";
+import {
+  agruparCreditosPorCelular,
+  DEFAULT_TIME_ZONE,
+  describirEstadoVencimiento,
+  generarMensajeVisitaHoy,
+  heredoc,
+  isHourAllowed,
+} from "./utils/recordatorio.js";
 import { logError, setupConsoleLogging } from "./utils/logger.js";
 
 setupConsoleLogging();
 
 const PORT = process.env.PORT || 3000;
-const APP_TIME_ZONE = process.env.TZ || "America/Argentina/Buenos_Aires";
+const APP_TIME_ZONE = process.env.TZ || DEFAULT_TIME_ZONE;
 process.env.TZ = APP_TIME_ZONE;
 const CRON_START_HOUR = Number(process.env.CRON_START_HOUR ?? 9);
 const CRON_END_HOUR = Number(process.env.CRON_END_HOUR ?? 20);
@@ -215,37 +223,17 @@ function generarMensaje({
   `;
 }
 
-function describirEstadoVencimiento(dias) {
-  if (dias < 0) return `Vencido hace ${Math.abs(dias)} días`;
-  if (dias === 0) return "Vence hoy";
-  if (dias === 1) return "Vence mañana";
-  return `Vence en ${dias} días`;
-}
-
-function debeEnviarCreditoHoy({ diaSemana, dias, id_credito }) {
-  const esUrgente = dias === 0 || dias === 1;
-
-  if (diaSemana === 0) {
-    return esUrgente;
-  }
-
-  if (esUrgente) {
-    return true;
-  }
-
-  const esPar = id_credito % 2 === 0;
-  return (
-    (esPar && [1, 3, 5].includes(diaSemana)) ||
-    (!esPar && [2, 4, 6].includes(diaSemana))
-  );
-}
-
 function generarMensajeAgrupado({
   nombre,
   creditos,
   cbu_alias = null,
   id_empresa,
+  visitaHoy = false,
 }) {
+  if (visitaHoy) {
+    return generarMensajeVisitaHoy(nombre);
+  }
+
   const formasPago = cbu_alias
     ? heredoc`
         *Formas de pago*
@@ -304,22 +292,6 @@ function generarMensajeAgrupado({
 
     ${formasPago}
   `;
-}
-
-function heredoc(strings, ...values) {
-  let raw = strings.reduce((acc, str, i) => acc + str + (values[i] ?? ""), "");
-
-  const lines = raw.split("\n");
-
-  // quitar líneas vacías inicial/final
-  while (lines.length && !lines[0].trim()) lines.shift();
-  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-
-  const indent = Math.min(
-    ...lines.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length),
-  );
-
-  return lines.map((l) => l.slice(indent)).join("\n");
 }
 
 function parseDbBoolean(value) {
@@ -401,7 +373,7 @@ export async function procesarRecordatoriosCron() {
     }
 
     // ⛔ Restricción horaria configurable
-    if (hora < CRON_START_HOUR || hora >= CRON_END_HOUR) {
+    if (!isHourAllowed(hora, CRON_START_HOUR, CRON_END_HOUR)) {
       console.log(
         `⏸️ Cron omitido por horario (${hora}:00) — permitido ${CRON_START_HOUR} a ${CRON_END_HOUR}`,
       );
@@ -414,7 +386,8 @@ export async function procesarRecordatoriosCron() {
           pe.id AS id_cliente,
           pe.nombre,
           pe.correo,
-          pe.celular,	   
+          pe.celular,
+          pe.fecha_proxima_visita,
           em.nombre as nombre_empresa,	 
           em.cbu_alias,	    
           cred.id AS id_credito,
@@ -464,46 +437,12 @@ export async function procesarRecordatoriosCron() {
       [ID_EMPRESA],
     );
 
-    const gruposPorCelular = new Map();
-
-    for (const row of rows) {
-      const { id_credito, celular } = row;
-
-      if (!celular) continue;
-
-      // Normalizar fechas (evita errores por hora)
-      const dias = Math.round(
-        (new Date(row.fecha_vencimiento).setHours(0, 0, 0, 0) -
-          new Date(hoy).setHours(0, 0, 0, 0)) /
-          86400000,
-      );
-
-      const enviar = debeEnviarCreditoHoy({
-        diaSemana,
-        dias,
-        id_credito,
-      });
-
-      if (!enviar) continue;
-
-      const key = String(celular).trim();
-
-      if (!gruposPorCelular.has(key)) {
-        gruposPorCelular.set(key, {
-          celular: key,
-          nombre: row.nombre,
-          nombre_empresa: row.nombre_empresa,
-          cbu_alias: row.cbu_alias,
-          creditos: [],
-        });
-      }
-
-      gruposPorCelular.get(key).creditos.push({
-        id_credito,
-        dias,
-        total_deuda: row.total_deuda,
-      });
-    }
+    const gruposPorCelular = agruparCreditosPorCelular({
+      rows,
+      hoy,
+      diaSemana,
+      timeZone: APP_TIME_ZONE,
+    });
 
     for (const grupo of gruposPorCelular.values()) {
       if (enviados >= LIMITE_ENVIO) {
@@ -537,6 +476,7 @@ export async function procesarRecordatoriosCron() {
           creditos: creditosLockeados,
           cbu_alias: grupo.cbu_alias,
           id_empresa: ID_EMPRESA,
+          visitaHoy: grupo.visitaHoy,
         });
 
         let resul_envio = await enviar_mensaje({
