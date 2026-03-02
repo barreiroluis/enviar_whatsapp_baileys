@@ -92,7 +92,8 @@ test("el mensaje de visita hoy reemplaza al recordatorio normal", () => {
   assert.match(mensaje, /^Hola Leandro,/);
 });
 
-test("usa la zona horaria por defecto de la app cuando el host inyecta UTC", () => {
+test("usa TIME como fuente de zona horaria y cae al default si no existe", () => {
+  assert.equal(resolveAppTimeZone({ TIME: "America/Mexico_City" }), "America/Mexico_City");
   assert.equal(resolveAppTimeZone({ TZ: "Etc/UTC" }), DEFAULT_TIME_ZONE);
-  assert.equal(resolveAppTimeZone({ TZ: "America/Mexico_City" }), "America/Mexico_City");
+  assert.equal(resolveAppTimeZone({}), DEFAULT_TIME_ZONE);
 });

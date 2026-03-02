@@ -17,7 +17,7 @@ cp .env.example .env
 
 Configura tus variables en `.env`.
 
-Define `TZ=America/Argentina/Buenos_Aires` en `.env` para que el cron y los
+Define `TIME=America/Argentina/Buenos_Aires` en `.env` para que el cron y los
 timestamps internos usen la hora correcta.
 
 ## Ejecutar

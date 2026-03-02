@@ -4,6 +4,7 @@ import { enviar_mensaje } from "./services/enviar_mensaje.js";
 import { procesarRecordatoriosCron } from "./index.js";
 import { logError } from "./utils/logger.js";
 import { cleanNumber } from "./utils/cleanNumber.js";
+import { getCurrentDateTime } from "./utils/date.js";
 
 const app = express();
 app.use(express.json());
@@ -31,7 +32,7 @@ const sendWithApi = async (req, res) => {
     console.log("📡 Respuesta /send", {
       status,
       payload,
-      timestamp: new Date().toISOString(),
+      timestamp: getCurrentDateTime(),
     });
     return res.status(status).json(payload);
   };
