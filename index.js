@@ -10,18 +10,18 @@ import moment from "moment-timezone";
 import { getConnectionWithRelease } from "./database.js";
 import {
   agruparCreditosPorCelular,
-  DEFAULT_TIME_ZONE,
   describirEstadoVencimiento,
   generarMensajeVisitaHoy,
   heredoc,
   isHourAllowed,
 } from "./utils/recordatorio.js";
 import { logError, setupConsoleLogging } from "./utils/logger.js";
+import { resolveAppTimeZone } from "./utils/timezone.js";
 
 setupConsoleLogging();
 
 const PORT = process.env.PORT || 3000;
-const APP_TIME_ZONE = process.env.TZ || DEFAULT_TIME_ZONE;
+const APP_TIME_ZONE = resolveAppTimeZone();
 process.env.TZ = APP_TIME_ZONE;
 const CRON_START_HOUR = Number(process.env.CRON_START_HOUR ?? 9);
 const CRON_END_HOUR = Number(process.env.CRON_END_HOUR ?? 20);
@@ -538,6 +538,7 @@ export async function procesarRecordatoriosCron() {
 
   app.listen(PORT, () => {
     console.log(`🚀 API WhatsApp en http://localhost:${PORT}`);
+    console.log(`🕒 Zona horaria app: ${APP_TIME_ZONE}`);
     console.log("Server started successfully."); // 👈 AQUÍ
   });
 })();

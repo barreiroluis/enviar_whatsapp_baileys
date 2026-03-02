@@ -1,6 +1,5 @@
 import moment from "moment-timezone";
-
-export const DEFAULT_TIME_ZONE = "America/Argentina/Buenos_Aires";
+import { DEFAULT_TIME_ZONE } from "./timezone.js";
 
 function toDateOnlyMoment(dateValue, timeZone = DEFAULT_TIME_ZONE) {
   if (!dateValue) return null;

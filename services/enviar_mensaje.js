@@ -3,6 +3,7 @@ import { saveMessageMysql } from "../adapter/mysql.js";
 import { cleanNumber, jidToPhone, toCrmJid } from "../utils/cleanNumber.js";
 import { getCurrentDateTime } from "../utils/date.js";
 import { getMediaTypeFromUrl, getFileNameFromUrl } from "../utils/media.js";
+import { resolveAppTimeZone } from "../utils/timezone.js";
 
 export async function enviar_mensaje({
   to,
@@ -77,7 +78,7 @@ export async function enviar_mensaje({
     adjunto: Boolean(adjunto),
     message: message.trim(),
     timestamp: getCurrentDateTime(),
-    timezone: process.env.TZ || "America/Argentina/Buenos_Aires",
+    timezone: resolveAppTimeZone(),
   });
 
   // 💾 Guardar SOLO lo que manda el sistema

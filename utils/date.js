@@ -1,6 +1,7 @@
 import moment from "moment-timezone";
+import { resolveAppTimeZone } from "./timezone.js";
 
 export function getCurrentDateTime() {
-  const timeZone = process.env.TZ || "UTC";
+  const timeZone = resolveAppTimeZone();
   return moment.tz(timeZone).format("YYYY-MM-DD HH:mm:ss");
 }

@@ -7,6 +7,10 @@ import {
   heredoc,
   isHourAllowed,
 } from "../utils/recordatorio.js";
+import {
+  DEFAULT_TIME_ZONE,
+  resolveAppTimeZone,
+} from "../utils/timezone.js";
 
 test("permite envios solo entre las 9 y las 20", () => {
   assert.equal(isHourAllowed(8, 9, 20), false);
@@ -86,4 +90,9 @@ test("el mensaje de visita hoy reemplaza al recordatorio normal", () => {
 
   assert.match(mensaje, /motorizado pasará por \*tu casa hoy\*/i);
   assert.match(mensaje, /^Hola Leandro,/);
+});
+
+test("usa la zona horaria por defecto de la app cuando el host inyecta UTC", () => {
+  assert.equal(resolveAppTimeZone({ TZ: "Etc/UTC" }), DEFAULT_TIME_ZONE);
+  assert.equal(resolveAppTimeZone({ TZ: "America/Mexico_City" }), "America/Mexico_City");
 });
