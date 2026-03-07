@@ -1,5 +1,5 @@
 import { getConnectionWithRelease, isMySQL } from "../database.js";
-import { getCurrentDateTime } from "../utils/date.js";
+import { getCurrentDateTimeUtc } from "../utils/date.js";
 import { logError } from "../utils/logger.js";
 
 export async function saveMessageMysql(
@@ -18,7 +18,7 @@ export async function saveMessageMysql(
   let connection;
 
   try {
-    const fecha_reg = getCurrentDateTime();
+    const fecha_reg = getCurrentDateTimeUtc();
     const id_empresa = Number(process.env.ID_EMPRESA);
 
     connection = await getConnectionWithRelease();

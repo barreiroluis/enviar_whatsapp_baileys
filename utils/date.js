@@ -5,3 +5,7 @@ export function getCurrentDateTime() {
   const timeZone = resolveAppTimeZone();
   return moment.tz(timeZone).format("YYYY-MM-DD HH:mm:ss");
 }
+
+export function getCurrentDateTimeUtc() {
+  return moment.utc().format("YYYY-MM-DD HH:mm:ss");
+}
