@@ -16,7 +16,7 @@ function createPool() {
 
   const p = mysql.createPool({
     ...database,
-    connectionLimit: 50,
+    connectionLimit: 5,
     waitForConnections: true,
     queueLimit: 0,
     connectTimeout: 10000,
