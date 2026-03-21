@@ -16,6 +16,7 @@ import {
   isHourAllowed,
 } from "./utils/recordatorio.js";
 import { logError, setupConsoleLogging } from "./utils/logger.js";
+import { getCurrentDateTime } from "./utils/date.js";
 import { resolveAppTimeZone } from "./utils/timezone.js";
 
 setupConsoleLogging();
@@ -340,6 +341,7 @@ export async function procesarRecordatoriosCron() {
 
   try {
     conn = await getConnectionWithRelease();
+    console.log(`[DB] conexión obtenida del pool — ${getCurrentDateTime()}`);
 
     const cronRecordatorioEnabled = await isCronRecordatorioEnabledForEmpresa(
       conn,
@@ -529,7 +531,10 @@ export async function procesarRecordatoriosCron() {
   } catch (err) {
     logError("🔥 Error crítico en cron", err, { empresa: ID_EMPRESA });
   } finally {
-    if (conn) conn.release();
+    if (conn) {
+      conn.release();
+      console.log(`[DB] conexión liberada al pool — ${getCurrentDateTime()}`);
+    }
   }
 }
 

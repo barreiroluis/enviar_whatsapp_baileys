@@ -167,6 +167,7 @@ export function addQRClient(res) {
 }
 
 function notifyQRClients(data) {
+  console.log(`[SSE] broadcast (${qrClients.size} clientes) → ${JSON.stringify(data)}`);
   for (const client of qrClients) {
     client.write(`data: ${JSON.stringify(data)}\n\n`);
   }

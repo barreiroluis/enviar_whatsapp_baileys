@@ -13,6 +13,13 @@ app.use(express.urlencoded({ extended: true })); // 👈 CLAVE
 // 📂 Archivos estáticos (QR UI)
 app.use(express.static("public"));
 
+// 📋 Logger de todas las peticiones API
+app.use((req, res, next) => {
+  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  console.log(`[API] ${req.method} ${req.path} — ip:${ip} — ${getCurrentDateTime()}`);
+  next();
+});
+
 /* 🔲 QR en tiempo real (SSE) */
 app.get("/qr", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
@@ -20,7 +27,25 @@ app.get("/qr", (req, res) => {
   res.setHeader("Connection", "keep-alive");
 
   res.flushHeaders();
+
+  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  console.log(`[SSE] cliente conectado — ip:${ip} — ${getCurrentDateTime()}`);
   res.write(`data: ${JSON.stringify({ status: "listening" })}\n\n`);
+  console.log(`[SSE] → {status:"listening"}`);
+
+  const _write = res.write.bind(res);
+  res.write = (chunk) => {
+    try {
+      const raw = chunk.toString().replace(/^data: /, "").trim();
+      const parsed = JSON.parse(raw);
+      console.log(`[SSE] → ${JSON.stringify(parsed)}`);
+    } catch {}
+    return _write(chunk);
+  };
+
+  res.on("close", () => {
+    console.log(`[SSE] cliente desconectado — ip:${ip}`);
+  });
 
   addQRClient(res);
 });
@@ -103,6 +128,7 @@ const sendWithApi = async (req, res) => {
 app.post("/send", sendWithApi);
 
 app.post("/run-cron-now", async (req, res) => {
+  console.log(`[CRON] ejecución manual solicitada — ${getCurrentDateTime()}`);
   const sock = getSock();
 
   if (!sock?.user) {
