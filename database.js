@@ -16,6 +16,7 @@ function createPool() {
 
   const p = mysql.createPool({
     ...database,
+    charset: "UTF8MB4",
     connectionLimit: 5,
     waitForConnections: true,
     queueLimit: 0,
