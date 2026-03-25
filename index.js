@@ -7,7 +7,7 @@ import { enviar_mensaje } from "./services/enviar_mensaje.js";
 
 import cron from "node-cron";
 import moment from "moment-timezone";
-import { getConnectionWithRelease } from "./database.js";
+import { getConnectionWithRelease, initPool } from "./database.js";
 import {
   agruparCreditosPorCelular,
   describirEstadoVencimiento,
@@ -544,6 +544,7 @@ export async function procesarRecordatoriosCron() {
   app.listen(PORT, () => {
     console.log(`🚀 API WhatsApp en http://localhost:${PORT}`);
     console.log(`🕒 Zona horaria app: ${APP_TIME_ZONE}`);
-    console.log("Server started successfully."); // 👈 AQUÍ
+    console.log("Server started successfully.");
+    initPool();
   });
 })();

@@ -85,3 +85,12 @@ export async function runQuery(query, params = []) {
 export function getPool() {
   return pool;
 }
+
+// Chequeo de conexión al arrancar el servidor
+export function initPool() {
+  if (!isMySQL) {
+    console.log("ℹ️  Base de datos desactivada (DATABASE !== 'mysql').");
+    return;
+  }
+  if (!pool) pool = createPool();
+}
