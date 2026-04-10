@@ -11,7 +11,6 @@ import { getConnectionWithRelease, initPool } from "./database.js";
 import {
   agruparCreditosPorCelular,
   describirEstadoVencimiento,
-  generarMensajeVisitaHoy,
   heredoc,
   isHourAllowed,
 } from "./utils/recordatorio.js";
@@ -111,23 +110,16 @@ function generarMensaje({
 }) {
   const link = `https://cuotafacil.com/cuotas.php?id=${id_credito}`;
 
-  const formasPago = cbu_alias
-    ? heredoc`
-        *Formas de pago*
-        - RapiPago
-        - PagoFácil
-        - Saldo MercadoPago
-        - Transferencia
-        ${cbu_alias}
+  const formasPago = heredoc`
+    *Formas de pago*
+    - RapiPago
+    - PagoFácil
+    - Saldo MercadoPago
+    - Transferencia
+    ${cbu_alias || ""}
 
-        📎 Luego de pagar, podés *responder este mensaje con el comprobante*.
-      `
-    : heredoc`
-        *Formas de pago*
-        - RapiPago
-        - PagoFácil
-        - Saldo MercadoPago
-      `;
+    📎 Luego de pagar, podés *responder este mensaje con el comprobante*.
+  `;
 
   // 🔴 VENCIDO
   if (dias < 0) {
@@ -229,39 +221,32 @@ function generarMensajeAgrupado({
   creditos,
   cbu_alias = null,
   id_empresa,
-  visitaHoy = false,
 }) {
-  if (visitaHoy) {
-    return generarMensajeVisitaHoy(nombre);
-  }
+  const formasPago = heredoc`
+    *Formas de pago*
+    - RapiPago
+    - PagoFácil
+    - Saldo MercadoPago
+    - Transferencia
+    ${cbu_alias || ""}
 
-  const formasPago = cbu_alias
-    ? heredoc`
-        *Formas de pago*
-        - RapiPago
-        - PagoFácil
-        - Saldo MercadoPago
-        - Transferencia
-        ${cbu_alias}
-
-        📎 Luego de pagar, podés *responder este mensaje con el comprobante*.
-      `
-    : heredoc`
-        *Formas de pago*
-        - RapiPago
-        - PagoFácil
-        - Saldo MercadoPago
-      `;
+    📎 Luego de pagar, podés *responder este mensaje con el comprobante*.
+  `;
 
   const resumenCreditos = creditos
     .map((credito) => {
       const link = `https://cuotafacil.com/cuotas.php?id=${credito.id_credito}`;
-      return heredoc`
-        • Crédito #${credito.id_credito}
-        ${describirEstadoVencimiento(credito.dias)}
-        Deuda: $${Number(credito.total_deuda || 0).toLocaleString("es-AR")}
-        ${link}
-      `;
+      const articulos = String(credito.articulos || "").trim();
+
+      return [
+        `• Crédito #${credito.id_credito}`,
+        articulos ? `Artículo(s): ${articulos}` : null,
+        describirEstadoVencimiento(credito.dias),
+        `Deuda: $${Number(credito.total_deuda || 0).toLocaleString("es-AR")}`,
+        link,
+      ]
+        .filter(Boolean)
+        .join("\n");
     })
     .join("\n\n");
 
@@ -333,7 +318,7 @@ export async function procesarRecordatoriosCron() {
   let conn;
   const hoy = ahora.clone().startOf("day").toDate();
   const diaSemana = ahora.day(); // 0=Domingo
-  const LIMITE_ENVIO = 50;
+  const LIMITE_ENVIO = 25;
 
   let enviados = 0;
   let creditosNotificados = 0;
@@ -389,10 +374,10 @@ export async function procesarRecordatoriosCron() {
           pe.nombre,
           pe.correo,
           pe.celular,
-          pe.fecha_proxima_visita,
           em.nombre as nombre_empresa,	 
           em.cbu_alias,	    
           cred.id AS id_credito,
+          articulos_credito.articulos,
           deuda.fecha_vencimiento,
           deuda.sum_valor AS total_cuotas,
           IFNULL(total_intereses.total_sum, 0) AS total_intereses,
@@ -402,6 +387,16 @@ export async function procesarRecordatoriosCron() {
           ON cred.id_cliente = pe.id 
           AND pe.anunciado_fecha != CURDATE()
       left join empresas em on em.id = pe.id_empresa
+
+      LEFT JOIN (
+          SELECT
+              art_ven.id_credito,
+              GROUP_CONCAT(DISTINCT art.nombre ORDER BY art.nombre SEPARATOR ', ') AS articulos
+          FROM articulos_ventidos art_ven
+          INNER JOIN articulos art ON art_ven.id_articulo = art.id
+          WHERE art_ven.devuelto = 0
+          GROUP BY art_ven.id_credito
+      ) articulos_credito ON articulos_credito.id_credito = cred.id
 
       LEFT JOIN (
           SELECT 
@@ -478,7 +473,6 @@ export async function procesarRecordatoriosCron() {
           creditos: creditosLockeados,
           cbu_alias: grupo.cbu_alias,
           id_empresa: ID_EMPRESA,
-          visitaHoy: grupo.visitaHoy,
         });
 
         let resul_envio = await enviar_mensaje({

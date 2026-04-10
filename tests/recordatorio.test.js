@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import {
   agruparCreditosPorCelular,
-  generarMensajeVisitaHoy,
   heredoc,
   isHourAllowed,
 } from "../utils/recordatorio.js";
@@ -28,8 +27,8 @@ test("agrupa multiples creditos del mismo celular en un solo envio", () => {
       nombre_empresa: "Empresa",
       cbu_alias: "ALIAS.EMPRESA",
       fecha_vencimiento: "2026-02-28",
-      fecha_proxima_visita: "2026-02-28",
       total_deuda: 1000,
+      articulos: "Sillon Esquinero",
     },
     {
       id_credito: 11,
@@ -38,8 +37,8 @@ test("agrupa multiples creditos del mismo celular en un solo envio", () => {
       nombre_empresa: "Empresa",
       cbu_alias: "ALIAS.EMPRESA",
       fecha_vencimiento: "2026-02-28",
-      fecha_proxima_visita: null,
       total_deuda: 2000,
+      articulos: "Mesa Ratona",
     },
   ];
 
@@ -55,7 +54,8 @@ test("agrupa multiples creditos del mismo celular en un solo envio", () => {
   const grupo = grupos.get("3815551111");
   assert.ok(grupo);
   assert.equal(grupo.creditos.length, 2);
-  assert.equal(grupo.visitaHoy, true);
+  assert.equal(grupo.creditos[0].articulos, "Sillon Esquinero");
+  assert.equal(grupo.creditos[1].articulos, "Mesa Ratona");
 });
 
 test("heredoc elimina espacios a la izquierda en el mensaje final", () => {
@@ -83,13 +83,6 @@ test("heredoc elimina espacios a la izquierda en el mensaje final", () => {
   for (const line of mensaje.split("\n")) {
     assert.equal(line.startsWith("    "), false);
   }
-});
-
-test("el mensaje de visita hoy reemplaza al recordatorio normal", () => {
-  const mensaje = generarMensajeVisitaHoy("Leandro");
-
-  assert.match(mensaje, /motorizado pasará por \*tu casa hoy\*/i);
-  assert.match(mensaje, /^Hola Leandro,/);
 });
 
 test("usa TIME como fuente de zona horaria y cae al default si no existe", () => {

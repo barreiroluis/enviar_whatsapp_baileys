@@ -62,12 +62,6 @@ export function debeEnviarCreditoHoy({ diaSemana, dias, id_credito }) {
   );
 }
 
-export function generarMensajeVisitaHoy(nombre) {
-  return heredoc`
-    Hola ${nombre}, nuestro motorizado pasará por *tu casa hoy* 🏠👈🏍️ por la cuota, si tienes alguna preferencia de hora dínosla para evitar que no te encontremos.
-  `;
-}
-
 export function agruparCreditosPorCelular({
   rows,
   hoy = new Date(),
@@ -100,19 +94,15 @@ export function agruparCreditosPorCelular({
         nombre: row.nombre,
         nombre_empresa: row.nombre_empresa,
         cbu_alias: row.cbu_alias,
-        visitaHoy: false,
         creditos: [],
       });
-    }
-
-    if (isTodayInTimeZone(row.fecha_proxima_visita, timeZone, hoy)) {
-      gruposPorCelular.get(key).visitaHoy = true;
     }
 
     gruposPorCelular.get(key).creditos.push({
       id_credito,
       dias,
       total_deuda: row.total_deuda,
+      articulos: row.articulos,
     });
   }
 
