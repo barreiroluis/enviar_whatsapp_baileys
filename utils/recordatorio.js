@@ -38,7 +38,26 @@ export function calcularDiasHastaVencimiento(
 }
 
 export function describirEstadoVencimiento(dias) {
-  if (dias < 0) return `Vencido hace ${Math.abs(dias)} días`;
+  if (dias < 0) {
+    const diasVencido = Math.abs(dias);
+    if (diasVencido >= 365) {
+      const years = Math.floor(diasVencido / 365);
+      const remainingDays = diasVencido % 365;
+      const months = Math.floor(remainingDays / 30);
+      const yearsLabel = `${years} ${years === 1 ? "año" : "años"}`;
+      if (months > 0) {
+        return `Vencido hace ${yearsLabel} y ${months} ${months === 1 ? "mes" : "meses"}`;
+      }
+      return `Vencido hace ${yearsLabel}`;
+    }
+
+    if (diasVencido >= 30) {
+      const months = Math.floor(diasVencido / 30);
+      return `Vencido hace ${months} ${months === 1 ? "mes" : "meses"}`;
+    }
+
+    return `Vencido hace ${diasVencido} días`;
+  }
   if (dias === 0) return "Vence hoy";
   if (dias === 1) return "Vence mañana";
   return `Vence en ${dias} días`;
@@ -89,7 +108,7 @@ export function getDefaultRecordatorioConfig() {
           first_notice_after_days: 1,
           repeat_every_days: 3,
           template:
-            "Hola {name}, tu crédito #{credito_id} por {articulos} *está vencido hace {dias_vencido} días*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+            "Hola {name}, tu crédito #{credito_id} por {articulos} *{estado_vencimiento}*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
         },
       },
     },

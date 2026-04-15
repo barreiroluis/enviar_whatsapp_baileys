@@ -105,6 +105,7 @@ function getLegacyTemplateCandidates() {
     overdue: [
       "• Crédito #{credito_id}\nArtículo(s): {articulos}\nVencido hace {dias_vencido} días\nSaldo: ${saldo}\n{resumen_url}",
       "*RECORDATORIO*\n{name}\n\nTenés {cantidad_creditos} crédito(s) para revisar:\n\n• Crédito #{credito_id}\nArtículo(s): {articulos}\nVencido hace {dias_vencido} días\nDeuda: ${deuda_total}\n{resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Luego de pagar, podés *responder este mensaje con el comprobante*.",
+      "Hola {name}, tu crédito #{credito_id} por {articulos} *está vencido hace {dias_vencido} días*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
     ],
   };
 }

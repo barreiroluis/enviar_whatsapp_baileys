@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  describirEstadoVencimiento,
   getDefaultRecordatorioConfig,
   heredoc,
   isHourAllowed,
@@ -28,6 +29,11 @@ test("usa config por defecto para 3, 1, hoy y vencidos", () => {
   assert.equal(config.templates.events.due_1.enabled, 1);
   assert.equal(config.templates.events.due_0.enabled, 1);
   assert.equal(config.templates.events.overdue.enabled, 1);
+});
+
+test("humaniza vencidos largos en meses y años", () => {
+  assert.equal(describirEstadoVencimiento(-45), "Vencido hace 1 mes");
+  assert.equal(describirEstadoVencimiento(-1436), "Vencido hace 3 años y 11 meses");
 });
 
 test("envia vencidos cuando ya corresponde el primer aviso", () => {
