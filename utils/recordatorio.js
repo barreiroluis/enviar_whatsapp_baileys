@@ -44,69 +44,219 @@ export function describirEstadoVencimiento(dias) {
   return `Vence en ${dias} días`;
 }
 
-export function debeEnviarCreditoHoy({ diaSemana, dias, id_credito }) {
-  const esUrgente = dias === 0 || dias === 1;
+export function calcularDiasDesdeFecha(
+  fechaValue,
+  hoy = new Date(),
+  timeZone = DEFAULT_TIME_ZONE,
+) {
+  if (!fechaValue) return Number.NaN;
 
-  if (diaSemana === 0) {
-    return esUrgente;
+  const fecha = moment.tz(fechaValue, timeZone);
+  if (!fecha.isValid()) return Number.NaN;
+
+  return moment.tz(hoy, timeZone).startOf("day").diff(fecha.startOf("day"), "days");
+}
+
+export function getDefaultRecordatorioConfig() {
+  return {
+    cron_recordatorio: false,
+    schedule: {
+      start_hour: 9,
+      end_hour: 20,
+    },
+    delivery: {
+      max_messages_per_run: 25,
+    },
+    templates: {
+      events: {
+        due_3: {
+          enabled: 1,
+          template:
+            "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence en 3 días*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+        },
+        due_1: {
+          enabled: 1,
+          template:
+            "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence mañana*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+        },
+        due_0: {
+          enabled: 1,
+          template:
+            "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence hoy*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+        },
+        overdue: {
+          enabled: 1,
+          first_notice_after_days: 1,
+          repeat_every_days: 3,
+          template:
+            "Hola {name}, tu crédito #{credito_id} por {articulos} *está vencido hace {dias_vencido} días*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+        },
+      },
+    },
+  };
+}
+
+export function normalizarRecordatorioConfig(rawConfig = {}) {
+  const defaults = getDefaultRecordatorioConfig();
+  const rawSchedule = rawConfig.schedule || {};
+  const rawDelivery = rawConfig.delivery || {};
+  const rawTemplates = rawConfig.templates || {};
+  const rawEvents = rawTemplates.events || {};
+  const rawOverdue = rawEvents.overdue || {};
+
+  return {
+    cron_recordatorio:
+      rawConfig.cron_recordatorio ?? defaults.cron_recordatorio,
+    schedule: {
+      start_hour:
+        Number(rawSchedule.start_hour ?? defaults.schedule.start_hour) ||
+        defaults.schedule.start_hour,
+      end_hour:
+        Number(rawSchedule.end_hour ?? defaults.schedule.end_hour) ||
+        defaults.schedule.end_hour,
+    },
+    delivery: {
+      max_messages_per_run:
+        Number(
+          rawDelivery.max_messages_per_run ??
+            defaults.delivery.max_messages_per_run,
+        ) || defaults.delivery.max_messages_per_run,
+    },
+    templates: {
+      events: {
+        due_3: {
+          enabled: Number(
+            rawEvents.due_3?.enabled ??
+              defaults.templates.events.due_3.enabled,
+          ),
+          template:
+            rawEvents.due_3?.template ??
+            defaults.templates.events.due_3.template,
+        },
+        due_1: {
+          enabled: Number(
+            rawEvents.due_1?.enabled ??
+              defaults.templates.events.due_1.enabled,
+          ),
+          template:
+            rawEvents.due_1?.template ??
+            defaults.templates.events.due_1.template,
+        },
+        due_0: {
+          enabled: Number(
+            rawEvents.due_0?.enabled ??
+              defaults.templates.events.due_0.enabled,
+          ),
+          template:
+            rawEvents.due_0?.template ??
+            defaults.templates.events.due_0.template,
+        },
+        overdue: {
+          enabled: Number(
+            rawOverdue.enabled ?? defaults.templates.events.overdue.enabled,
+          ),
+          first_notice_after_days:
+            Number(
+              rawOverdue.first_notice_after_days ??
+                defaults.templates.events.overdue.first_notice_after_days,
+            ) || defaults.templates.events.overdue.first_notice_after_days,
+          repeat_every_days:
+            Number(
+              rawOverdue.repeat_every_days ??
+                defaults.templates.events.overdue.repeat_every_days,
+            ) || defaults.templates.events.overdue.repeat_every_days,
+          template:
+            rawOverdue.template ?? defaults.templates.events.overdue.template,
+        },
+      },
+    },
+  };
+}
+
+export function getRecordatorioEventKey(dias, config) {
+  const events = config?.templates?.events || {};
+
+  if (dias === 3 && Number(events.due_3?.enabled) === 1) return "due_3";
+  if (dias === 1 && Number(events.due_1?.enabled) === 1) return "due_1";
+  if (dias === 0 && Number(events.due_0?.enabled) === 1) return "due_0";
+  if (dias < 0 && Number(events.overdue?.enabled) === 1) return "overdue";
+
+  return null;
+}
+
+export function shouldSendOverdueCredit({
+  dias,
+  recordatorio_update,
+  fecha_vencimiento,
+  hoy = new Date(),
+  config,
+  timeZone = DEFAULT_TIME_ZONE,
+}) {
+  const overdueConfig = config?.templates?.events?.overdue || {};
+  const diasVencido = Math.abs(Number(dias || 0));
+  const firstNotice = Math.max(1, Number(overdueConfig.first_notice_after_days || 1));
+  const repeatEvery = Math.max(1, Number(overdueConfig.repeat_every_days || 1));
+
+  if (dias >= 0 || diasVencido < firstNotice) {
+    return false;
   }
 
-  if (esUrgente) {
+  if (!recordatorio_update) {
     return true;
   }
 
-  const esPar = id_credito % 2 === 0;
-  return (
-    (esPar && [1, 3, 5].includes(diaSemana)) ||
-    (!esPar && [2, 4, 6].includes(diaSemana))
-  );
-}
-
-export function agruparCreditosPorCelular({
-  rows,
-  hoy = new Date(),
-  diaSemana,
-  timeZone = DEFAULT_TIME_ZONE,
-}) {
-  const gruposPorCelular = new Map();
-
-  for (const row of rows) {
-    const { id_credito, celular } = row;
-
-    if (!celular) continue;
-
-    const dias = calcularDiasHastaVencimiento(row.fecha_vencimiento, hoy, timeZone);
-    if (!Number.isFinite(dias)) continue;
-
-    const enviar = debeEnviarCreditoHoy({
-      diaSemana,
-      dias,
-      id_credito,
-    });
-
-    if (!enviar) continue;
-
-    const key = String(celular).trim();
-
-    if (!gruposPorCelular.has(key)) {
-      gruposPorCelular.set(key, {
-        celular: key,
-        nombre: row.nombre,
-        nombre_empresa: row.nombre_empresa,
-        cbu_alias: row.cbu_alias,
-        creditos: [],
-      });
-    }
-
-    gruposPorCelular.get(key).creditos.push({
-      id_credito,
-      dias,
-      total_deuda: row.total_deuda,
-      articulos: row.articulos,
-    });
+  const ultimoRecordatorio = moment.tz(recordatorio_update, timeZone);
+  if (!ultimoRecordatorio.isValid()) {
+    return true;
   }
 
-  return gruposPorCelular;
+  const fechaVencimiento = toDateOnlyMoment(fecha_vencimiento, timeZone);
+  const hoyMoment = moment.tz(hoy, timeZone).startOf("day");
+  const ultimoRecordatorioDia = ultimoRecordatorio.clone().startOf("day");
+
+  if (!fechaVencimiento) {
+    return hoyMoment.diff(ultimoRecordatorioDia, "days") >= repeatEvery;
+  }
+
+  if (ultimoRecordatorioDia.isBefore(fechaVencimiento)) {
+    return true;
+  }
+
+  return hoyMoment.diff(ultimoRecordatorioDia, "days") >= repeatEvery;
+}
+
+export function shouldSendCredit({
+  row,
+  dias,
+  config,
+  hoy = new Date(),
+  timeZone = DEFAULT_TIME_ZONE,
+}) {
+  const eventKey = getRecordatorioEventKey(dias, config);
+  if (!eventKey) return false;
+
+  if (eventKey !== "overdue") {
+    return true;
+  }
+
+  return shouldSendOverdueCredit({
+    dias,
+    recordatorio_update: row.recordatorio_update,
+    fecha_vencimiento: row.fecha_vencimiento,
+    hoy,
+    config,
+    timeZone,
+  });
+}
+
+export function renderTemplate(template, variables = {}) {
+  return String(template || "").replace(/\{[a-zA-Z0-9_]+\}/g, (token) => {
+    const key = token.slice(1, -1);
+    const value = Object.prototype.hasOwnProperty.call(variables, key)
+      ? variables[key]
+      : "";
+    return value == null ? "" : String(value);
+  });
 }
 
 export function heredoc(strings, ...values) {

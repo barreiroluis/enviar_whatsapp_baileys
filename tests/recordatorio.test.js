@@ -2,9 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  agruparCreditosPorCelular,
+  getDefaultRecordatorioConfig,
   heredoc,
   isHourAllowed,
+  normalizarRecordatorioConfig,
+  renderTemplate,
+  shouldSendCredit,
 } from "../utils/recordatorio.js";
 import {
   DEFAULT_TIME_ZONE,
@@ -18,44 +21,108 @@ test("permite envios solo entre las 9 y las 20", () => {
   assert.equal(isHourAllowed(20, 9, 20), false);
 });
 
-test("agrupa multiples creditos del mismo celular en un solo envio", () => {
-  const rows = [
-    {
-      id_credito: 10,
-      celular: "3815551111",
-      nombre: "Leandro",
-      nombre_empresa: "Empresa",
-      cbu_alias: "ALIAS.EMPRESA",
-      fecha_vencimiento: "2026-02-28",
-      total_deuda: 1000,
-      articulos: "Sillon Esquinero",
-    },
-    {
-      id_credito: 11,
-      celular: "3815551111",
-      nombre: "Leandro",
-      nombre_empresa: "Empresa",
-      cbu_alias: "ALIAS.EMPRESA",
-      fecha_vencimiento: "2026-02-28",
-      total_deuda: 2000,
-      articulos: "Mesa Ratona",
-    },
-  ];
+test("usa config por defecto para 3, 1, hoy y vencidos", () => {
+  const config = getDefaultRecordatorioConfig();
 
-  const grupos = agruparCreditosPorCelular({
-    rows,
-    hoy: new Date("2026-02-28T12:00:00-03:00"),
-    diaSemana: 6,
-    timeZone: "America/Argentina/Buenos_Aires",
+  assert.equal(config.templates.events.due_3.enabled, 1);
+  assert.equal(config.templates.events.due_1.enabled, 1);
+  assert.equal(config.templates.events.due_0.enabled, 1);
+  assert.equal(config.templates.events.overdue.enabled, 1);
+});
+
+test("envia vencidos cuando ya corresponde el primer aviso", () => {
+  const config = normalizarRecordatorioConfig({
+    templates: {
+      events: {
+        overdue: {
+          enabled: 1,
+          first_notice_after_days: 3,
+          repeat_every_days: 5,
+        },
+      },
+    },
   });
 
-  assert.equal(grupos.size, 1);
+  const row = {
+    fecha_vencimiento: "2026-04-10",
+    recordatorio_update: null,
+  };
 
-  const grupo = grupos.get("3815551111");
-  assert.ok(grupo);
-  assert.equal(grupo.creditos.length, 2);
-  assert.equal(grupo.creditos[0].articulos, "Sillon Esquinero");
-  assert.equal(grupo.creditos[1].articulos, "Mesa Ratona");
+  assert.equal(
+    shouldSendCredit({
+      row,
+      dias: -3,
+      config,
+      hoy: new Date("2026-04-13T10:00:00-03:00"),
+      timeZone: "America/Argentina/Buenos_Aires",
+    }),
+    true,
+  );
+});
+
+test("no reenvia vencidos antes de cumplir la frecuencia configurada", () => {
+  const config = normalizarRecordatorioConfig({
+    templates: {
+      events: {
+        overdue: {
+          enabled: 1,
+          first_notice_after_days: 1,
+          repeat_every_days: 3,
+        },
+      },
+    },
+  });
+
+  const row = {
+    fecha_vencimiento: "2026-04-10",
+    recordatorio_update: "2026-04-12 08:00:00",
+  };
+
+  assert.equal(
+    shouldSendCredit({
+      row,
+      dias: -4,
+      config,
+      hoy: new Date("2026-04-13T10:00:00-03:00"),
+      timeZone: "America/Argentina/Buenos_Aires",
+    }),
+    false,
+  );
+});
+
+test("el primer aviso vencido no queda bloqueado por un recordatorio previo al vencimiento", () => {
+  const config = normalizarRecordatorioConfig({
+    templates: {
+      events: {
+        overdue: {
+          enabled: 1,
+          first_notice_after_days: 1,
+          repeat_every_days: 3,
+        },
+      },
+    },
+  });
+
+  const row = {
+    fecha_vencimiento: "2026-04-10",
+    recordatorio_update: "2026-04-09 11:00:00",
+  };
+
+  assert.equal(
+    shouldSendCredit({
+      row,
+      dias: -1,
+      config,
+      hoy: new Date("2026-04-11T10:00:00-03:00"),
+      timeZone: "America/Argentina/Buenos_Aires",
+    }),
+    true,
+  );
+});
+
+test("renderTemplate reemplaza variables desconocidas por vacio", () => {
+  const mensaje = renderTemplate("Hola {name} {missing}", { name: "Luis" });
+  assert.equal(mensaje, "Hola Luis ");
 });
 
 test("heredoc elimina espacios a la izquierda en el mensaje final", () => {
@@ -67,15 +134,7 @@ test("heredoc elimina espacios a la izquierda en el mensaje final", () => {
   `;
 
   const mensaje = heredoc`
-    *RECORDATORIO*
-    LEANDRO DAVID JUÁREZ
-
-    Tenés 1 crédito(s) para revisar:
-
-    • Crédito #1651673431
-    Vencido hace 1298 días
-    Deuda: $19.500
-    https://cuotafacil.com/cuotas.php?id=1651673431
+    Hola Juan
 
     ${formasPago}
   `;
@@ -86,7 +145,10 @@ test("heredoc elimina espacios a la izquierda en el mensaje final", () => {
 });
 
 test("usa TIME como fuente de zona horaria y cae al default si no existe", () => {
-  assert.equal(resolveAppTimeZone({ TIME: "America/Mexico_City" }), "America/Mexico_City");
+  assert.equal(
+    resolveAppTimeZone({ TIME: "America/Mexico_City" }),
+    "America/Mexico_City",
+  );
   assert.equal(resolveAppTimeZone({ TZ: "Etc/UTC" }), DEFAULT_TIME_ZONE);
   assert.equal(resolveAppTimeZone({}), DEFAULT_TIME_ZONE);
 });
