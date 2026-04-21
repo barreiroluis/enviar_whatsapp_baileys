@@ -93,10 +93,12 @@ function getLegacyTemplateCandidates() {
     due_3: [
       "• Crédito #{credito_id}\nArtículo(s): {articulos}\nVence en 3 días\nSaldo: ${saldo}\n{resumen_url}",
       "*RECORDATORIO*\n{name}\n\nTenés {cantidad_creditos} crédito(s) para revisar:\n\n• Crédito #{credito_id}\nArtículo(s): {articulos}\nVence en 3 días\nDeuda: ${deuda_total}\n{resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Luego de pagar, podés *responder este mensaje con el comprobante*.",
+      "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence en 3 días*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
     ],
     due_1: [
       "• Crédito #{credito_id}\nArtículo(s): {articulos}\nVence mañana\nSaldo: ${saldo}\n{resumen_url}",
       "*RECORDATORIO*\n{name}\n\nTenés {cantidad_creditos} crédito(s) para revisar:\n\n• Crédito #{credito_id}\nArtículo(s): {articulos}\nVence mañana\nDeuda: ${deuda_total}\n{resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Luego de pagar, podés *responder este mensaje con el comprobante*.",
+      "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence mañana*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
     ],
     due_0: [
       "• Crédito #{credito_id}\nArtículo(s): {articulos}\nVence hoy\nSaldo: ${saldo}\n{resumen_url}",
@@ -114,10 +116,16 @@ function getLegacyTemplateCandidates() {
 
 function normalizeTemplateValue(eventKey, templateValue) {
   const defaults = getDefaultRecordatorioConfig().templates.events;
-  const currentValue = String(templateValue || "")
+  let currentValue = String(templateValue || "")
     .replaceAll("{abono_al_dia}", "{valor_a_pagar}")
     .replaceAll("{abonos_pendientes}", "{valor_a_pagar}")
     .trim();
+  if (eventKey === "due_3" || eventKey === "due_1") {
+    currentValue = currentValue.replaceAll(
+      "Abono pendiente: ${deuda_total}",
+      "Próxima cuota a pagar: ${valor_proxima_cuota}",
+    );
+  }
   const legacyCandidates = getLegacyTemplateCandidates()[eventKey] || [];
 
   if (!currentValue || legacyCandidates.includes(currentValue)) {
@@ -221,6 +229,7 @@ function buildRecordatorioVariables(row, dias, empresaConfig) {
   const articulos = String(row.articulos || "").trim() || "artículo pendiente";
   const deudaTotal = formatCurrency(row.total_deuda);
   const abonoAlDia = formatCurrency(row.total_al_dia);
+  const valorProximaCuota = formatCurrency(row.valor_proxima_cuota);
 
   return {
     name: row.nombre || "Cliente",
@@ -231,6 +240,7 @@ function buildRecordatorioVariables(row, dias, empresaConfig) {
     saldo: deudaTotal,
     abono: deudaTotal,
     valor_a_pagar: abonoAlDia,
+    valor_proxima_cuota: valorProximaCuota,
     abonos_pendientes: abonoAlDia,
     abono_al_dia: abonoAlDia,
     deuda_total: deudaTotal,
@@ -325,6 +335,7 @@ export async function procesarRecordatoriosCron() {
           IFNULL(total_intereses.total_sum, 0) AS total_intereses,
           (deuda.sum_valor + IFNULL(total_intereses.total_sum, 0)) AS total_deuda,
           (IFNULL(deuda_al_dia.sum_valor, 0) + IFNULL(total_intereses.total_sum, 0)) AS total_al_dia,
+          (IFNULL(proxima_cuota.valor_cuota, 0) + IFNULL(proxima_cuota.total_intereses, 0)) AS valor_proxima_cuota,
           cred.recordatorio_update
       FROM creditos cred
       INNER JOIN persona pe
@@ -372,6 +383,38 @@ export async function procesarRecordatoriosCron() {
           GROUP BY id_credito
       ) total_intereses
           ON total_intereses.id_credito = cred.id
+      LEFT JOIN (
+          SELECT
+              cuo.id_credito,
+              cuo.id AS id_cuota,
+              cuo.valor AS valor_cuota,
+              IFNULL(intereses.total_sum, 0) AS total_intereses
+          FROM cuotas cuo
+          LEFT JOIN (
+              SELECT
+                  id_cuota,
+                  SUM(valor) AS total_sum
+              FROM cuotas_interes_punitorio
+              WHERE pagado = 0
+              GROUP BY id_cuota
+          ) intereses
+              ON intereses.id_cuota = cuo.id
+          WHERE cuo.estado = 0
+            AND NOT EXISTS (
+                SELECT 1
+                FROM cuotas prev
+                WHERE prev.id_credito = cuo.id_credito
+                  AND prev.estado = 0
+                  AND (
+                      prev.fecha_vencimiento < cuo.fecha_vencimiento
+                      OR (
+                          prev.fecha_vencimiento = cuo.fecha_vencimiento
+                          AND prev.id < cuo.id
+                      )
+                  )
+            )
+      ) proxima_cuota
+          ON proxima_cuota.id_credito = cred.id
       WHERE
           cred.anulado = 0
           AND pe.estado NOT IN (5,7,8,9)

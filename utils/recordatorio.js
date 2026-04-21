@@ -91,12 +91,12 @@ export function getDefaultRecordatorioConfig() {
         due_3: {
           enabled: 1,
           template:
-            "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence en 3 días*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+            "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence en 3 días*.\n\nPróxima cuota a pagar: ${valor_proxima_cuota}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
         },
         due_1: {
           enabled: 1,
           template:
-            "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence mañana*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+            "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence mañana*.\n\nPróxima cuota a pagar: ${valor_proxima_cuota}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
         },
         due_0: {
           enabled: 1,
