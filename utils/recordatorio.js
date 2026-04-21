@@ -101,14 +101,14 @@ export function getDefaultRecordatorioConfig() {
         due_0: {
           enabled: 1,
           template:
-            "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence hoy*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+            "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence hoy*.\n\nValor a pagar para ponerte al día: ${valor_a_pagar}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
         },
         overdue: {
           enabled: 1,
           first_notice_after_days: 1,
           repeat_every_days: 3,
           template:
-            "Hola {name}, tu crédito #{credito_id} por {articulos} *{estado_vencimiento}*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+            "Hola {name}, tu crédito #{credito_id} por {articulos} *{estado_vencimiento}*.\n\nValor a pagar para ponerte al día: ${valor_a_pagar}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
         },
       },
     },

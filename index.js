@@ -101,18 +101,23 @@ function getLegacyTemplateCandidates() {
     due_0: [
       "• Crédito #{credito_id}\nArtículo(s): {articulos}\nVence hoy\nSaldo: ${saldo}\n{resumen_url}",
       "*RECORDATORIO*\n{name}\n\nTenés {cantidad_creditos} crédito(s) para revisar:\n\n• Crédito #{credito_id}\nArtículo(s): {articulos}\nVence hoy\nDeuda: ${deuda_total}\n{resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Luego de pagar, podés *responder este mensaje con el comprobante*.",
+      "Hola {name}, te recordamos que tu crédito #{credito_id} por {articulos} *vence hoy*.\n\nValor a pagar para ponerte al día: ${valor_a_pagar}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
     ],
     overdue: [
       "• Crédito #{credito_id}\nArtículo(s): {articulos}\nVencido hace {dias_vencido} días\nSaldo: ${saldo}\n{resumen_url}",
       "*RECORDATORIO*\n{name}\n\nTenés {cantidad_creditos} crédito(s) para revisar:\n\n• Crédito #{credito_id}\nArtículo(s): {articulos}\nVencido hace {dias_vencido} días\nDeuda: ${deuda_total}\n{resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Luego de pagar, podés *responder este mensaje con el comprobante*.",
       "Hola {name}, tu crédito #{credito_id} por {articulos} *está vencido hace {dias_vencido} días*.\n\nAbono pendiente: ${deuda_total}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
+      "Hola {name}, tu crédito #{credito_id} por {articulos} *{estado_vencimiento}*.\n\nValor a pagar para ponerte al día: ${valor_a_pagar}\nVer detalle: {resumen_url}\n\n*Formas de pago*\n- RapiPago\n- PagoFácil\n- Saldo MercadoPago\n- Transferencia\n{cbu_alias}\n\n📎 Si ya pagaste, podés responder este mensaje con el comprobante.",
     ],
   };
 }
 
 function normalizeTemplateValue(eventKey, templateValue) {
   const defaults = getDefaultRecordatorioConfig().templates.events;
-  const currentValue = String(templateValue || "").trim();
+  const currentValue = String(templateValue || "")
+    .replaceAll("{abono_al_dia}", "{valor_a_pagar}")
+    .replaceAll("{abonos_pendientes}", "{valor_a_pagar}")
+    .trim();
   const legacyCandidates = getLegacyTemplateCandidates()[eventKey] || [];
 
   if (!currentValue || legacyCandidates.includes(currentValue)) {
@@ -215,6 +220,7 @@ async function getRecordatorioConfigForEmpresa(conn, idEmpresa) {
 function buildRecordatorioVariables(row, dias, empresaConfig) {
   const articulos = String(row.articulos || "").trim() || "artículo pendiente";
   const deudaTotal = formatCurrency(row.total_deuda);
+  const abonoAlDia = formatCurrency(row.total_al_dia);
 
   return {
     name: row.nombre || "Cliente",
@@ -224,6 +230,9 @@ function buildRecordatorioVariables(row, dias, empresaConfig) {
     articulos,
     saldo: deudaTotal,
     abono: deudaTotal,
+    valor_a_pagar: abonoAlDia,
+    abonos_pendientes: abonoAlDia,
+    abono_al_dia: abonoAlDia,
     deuda_total: deudaTotal,
     resumen_url: getResumenUrl(row.id_credito),
     fecha_vencimiento: formatDateForTemplate(row.fecha_vencimiento),
@@ -312,8 +321,10 @@ export async function procesarRecordatoriosCron() {
           articulos_credito.articulos,
           deuda.fecha_vencimiento,
           deuda.sum_valor AS total_cuotas,
+          IFNULL(deuda_al_dia.sum_valor, 0) AS total_cuotas_al_dia,
           IFNULL(total_intereses.total_sum, 0) AS total_intereses,
           (deuda.sum_valor + IFNULL(total_intereses.total_sum, 0)) AS total_deuda,
+          (IFNULL(deuda_al_dia.sum_valor, 0) + IFNULL(total_intereses.total_sum, 0)) AS total_al_dia,
           cred.recordatorio_update
       FROM creditos cred
       INNER JOIN persona pe
@@ -342,6 +353,16 @@ export async function procesarRecordatoriosCron() {
           GROUP BY id_credito
       ) deuda
           ON deuda.id_credito = cred.id
+      LEFT JOIN (
+          SELECT
+              id_credito,
+              SUM(valor) AS sum_valor
+          FROM cuotas
+          WHERE estado = 0
+            AND fecha_vencimiento <= CURDATE()
+          GROUP BY id_credito
+      ) deuda_al_dia
+          ON deuda_al_dia.id_credito = cred.id
       LEFT JOIN (
           SELECT
               id_credito,
