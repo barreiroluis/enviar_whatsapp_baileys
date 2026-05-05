@@ -91,6 +91,11 @@ export async function enviar_mensaje({
       id_msg,
       "",
       id_operador,
+      {
+        to_transport_jid: toCrmContact,
+        chat_id_context: toCrmContact,
+        numero_emisor_context: fromCrmContact,
+      },
     );
   }
 
