@@ -340,7 +340,10 @@ export async function procesarRecordatoriosCron() {
       FROM creditos cred
       INNER JOIN persona pe
           ON cred.id_cliente = pe.id
-          AND pe.anunciado_fecha != CURDATE()
+          AND (
+            pe.anunciado_fecha IS NULL
+            OR pe.anunciado_fecha != CURDATE()
+          )
       LEFT JOIN empresas em
           ON em.id = pe.id_empresa
       LEFT JOIN (
