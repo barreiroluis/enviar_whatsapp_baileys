@@ -1,4 +1,5 @@
 import moment from "moment-timezone";
+import crypto from "node:crypto";
 
 let schemaReady = false;
 
@@ -13,6 +14,52 @@ export function getDateTimeLocal(timeZone, now = new Date()) {
 function shortText(value, maxLength = 255) {
   const text = String(value || "").trim();
   return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
+async function hasColumn(conn, tableName, columnName) {
+  const rows = await conn.query(
+    `
+    SHOW COLUMNS FROM \`${tableName}\` LIKE ?
+    `,
+    [columnName],
+  );
+  return rows.length > 0;
+}
+
+async function hasIndex(conn, tableName, indexName) {
+  const rows = await conn.query(
+    `
+    SHOW INDEX FROM \`${tableName}\` WHERE Key_name = ?
+    `,
+    [indexName],
+  );
+  return rows.length > 0;
+}
+
+async function addColumnIfMissing(conn, tableName, columnName, ddl) {
+  if (await hasColumn(conn, tableName, columnName)) return;
+  await conn.query(`ALTER TABLE \`${tableName}\` ADD COLUMN ${ddl}`);
+}
+
+async function addIndexIfMissing(conn, tableName, indexName, ddl) {
+  if (await hasIndex(conn, tableName, indexName)) return;
+  await conn.query(`ALTER TABLE \`${tableName}\` ADD ${ddl}`);
+}
+
+function buildAuditKey(detalle) {
+  const parts = [
+    detalle.id_credito || "",
+    detalle.id_cliente || "",
+    detalle.evento || "none",
+    detalle.estado || "",
+    detalle.motivo || "",
+    detalle.fecha_vencimiento || "",
+    Number.isFinite(detalle.dias_para_vencimiento)
+      ? detalle.dias_para_vencimiento
+      : "",
+  ];
+
+  return crypto.createHash("sha256").update(parts.join("|")).digest("hex");
 }
 
 export async function ensureRecordatorioAuditSchema(conn) {
@@ -61,19 +108,69 @@ export async function ensureRecordatorioAuditSchema(conn) {
       evento ENUM('due_3', 'due_1', 'due_0', 'overdue', 'none') NOT NULL DEFAULT 'none',
       estado ENUM('candidato', 'enviado', 'omitido', 'error') NOT NULL,
       motivo VARCHAR(255) NULL,
+      fecha_local DATE NULL,
       fecha_vencimiento DATE NULL,
       dias_para_vencimiento INT NULL,
       deuda_total DECIMAL(14,2) NULL,
       id_msg VARCHAR(120) NULL,
       error_message TEXT NULL,
+      audit_key CHAR(64) NULL,
+      first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      veces INT NOT NULL DEFAULT 1,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_run (id_run),
       INDEX idx_empresa_fecha (id_empresa, created_at),
+      INDEX idx_empresa_fecha_local (id_empresa, fecha_local),
       INDEX idx_credito (id_credito),
       INDEX idx_cliente (id_cliente),
-      INDEX idx_estado (estado)
+      INDEX idx_estado (estado),
+      UNIQUE KEY uk_recordatorio_detalle_dia (id_empresa, fecha_local, audit_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "fecha_local",
+    "fecha_local DATE NULL AFTER motivo",
+  );
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "audit_key",
+    "audit_key CHAR(64) NULL AFTER error_message",
+  );
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "first_seen_at",
+    "first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER audit_key",
+  );
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "last_seen_at",
+    "last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER first_seen_at",
+  );
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "veces",
+    "veces INT NOT NULL DEFAULT 1 AFTER last_seen_at",
+  );
+  await addIndexIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "idx_empresa_fecha_local",
+    "INDEX idx_empresa_fecha_local (id_empresa, fecha_local)",
+  );
+  await addIndexIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "uk_recordatorio_detalle_dia",
+    "UNIQUE KEY uk_recordatorio_detalle_dia (id_empresa, fecha_local, audit_key)",
+  );
 
   await conn.query(`
     CREATE TABLE IF NOT EXISTS recordatorio_owner_reportes (
@@ -147,6 +244,8 @@ export async function finishRecordatorioRun(conn, idRun, data = {}) {
 
 export async function insertRecordatorioDetalle(conn, detalle) {
   if (!detalle?.id_run) return;
+  const fechaLocal = detalle.fecha_local || moment().format("YYYY-MM-DD");
+  const auditKey = detalle.audit_key || buildAuditKey({ ...detalle, fecha_local: fechaLocal });
 
   await conn.query(
     `
@@ -161,13 +260,24 @@ export async function insertRecordatorioDetalle(conn, detalle) {
         evento,
         estado,
         motivo,
+        fecha_local,
         fecha_vencimiento,
         dias_para_vencimiento,
         deuda_total,
         id_msg,
-        error_message
+        error_message,
+        audit_key
       )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      id_run = VALUES(id_run),
+      celular = COALESCE(VALUES(celular), celular),
+      nombre_cliente = COALESCE(VALUES(nombre_cliente), nombre_cliente),
+      deuda_total = VALUES(deuda_total),
+      id_msg = COALESCE(VALUES(id_msg), id_msg),
+      error_message = COALESCE(VALUES(error_message), error_message),
+      last_seen_at = CURRENT_TIMESTAMP,
+      veces = veces + 1
     `,
     [
       detalle.id_run,
@@ -179,6 +289,7 @@ export async function insertRecordatorioDetalle(conn, detalle) {
       detalle.evento || "none",
       detalle.estado,
       shortText(detalle.motivo) || null,
+      fechaLocal,
       detalle.fecha_vencimiento || null,
       Number.isFinite(detalle.dias_para_vencimiento)
         ? detalle.dias_para_vencimiento
@@ -186,6 +297,7 @@ export async function insertRecordatorioDetalle(conn, detalle) {
       Number(detalle.deuda_total || 0) || 0,
       shortText(detalle.id_msg, 120) || null,
       detalle.error_message ? String(detalle.error_message).slice(0, 2000) : null,
+      auditKey,
     ],
   );
 }
@@ -199,6 +311,7 @@ export function buildDetalleFromCredito({
   motivo,
   idMsg,
   errorMessage,
+  fechaLocal,
 }) {
   const fechaVencimiento = credito?.fecha_vencimiento
     ? moment(credito.fecha_vencimiento).format("YYYY-MM-DD")
@@ -214,6 +327,7 @@ export function buildDetalleFromCredito({
     evento,
     estado,
     motivo,
+    fecha_local: fechaLocal,
     fecha_vencimiento: fechaVencimiento,
     dias_para_vencimiento: credito?.dias,
     deuda_total: credito?.total_deuda,
