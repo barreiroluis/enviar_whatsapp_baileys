@@ -2,6 +2,7 @@ import express from "express";
 import {
   addQRClient,
   clearSessionFiles,
+  disconnectWhatsAppAccount,
   getDefaultAccountKey,
   getSock,
   getWhatsAppAccountStatus,
@@ -282,6 +283,26 @@ app.get("/accounts/:accountKey/qr", async (req, res) => {
   res.flushHeaders();
   res.write(`data: ${JSON.stringify({ status: "listening", account_key: accountKey })}\n\n`);
   addQRClient(res, accountKey);
+});
+
+app.post("/accounts/:accountKey/disconnect", async (req, res) => {
+  const accountKey = normalizeAccountKey(req.params.accountKey);
+
+  try {
+    await ensureNotificationAccountsSchema();
+    await disconnectWhatsAppAccount(accountKey);
+    res.json({
+      ok: true,
+      account_key: accountKey,
+      msg: "Sesión de WhatsApp cerrada. Genere un nuevo QR para volver a vincularla.",
+      runtime: getWhatsAppAccountStatus(accountKey),
+    });
+  } catch (err) {
+    logError("❌ Error cerrando sesión de cuenta WhatsApp notificación", err, {
+      accountKey,
+    });
+    res.status(500).json({ ok: false, msg: err.message });
+  }
 });
 
 app.delete("/accounts/:accountKey", async (req, res) => {

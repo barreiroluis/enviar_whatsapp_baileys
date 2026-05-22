@@ -56,6 +56,8 @@ function getSessionState(accountKey = DEFAULT_ACCOUNT_KEY) {
       reconnectAttempts: 0,
       reconnectCooldownUntil: 0,
       isInitializing: false,
+      manualDisconnect: false,
+      suppressReconnectUntil: 0,
       qrClients: new Set(),
     });
   }
@@ -165,6 +167,7 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
         }
 
         if (connection === "open") {
+          stateRef.manualDisconnect = false;
           stateRef.connectionStatus = "connected";
           stateRef.currentQR = null;
           stateRef.reconnectAttempts = 0;
@@ -181,6 +184,10 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
 
         if (connection === "close") {
           stateRef.connectionStatus = "disconnected";
+          const wasManualDisconnect =
+            stateRef.manualDisconnect ||
+            stateRef.suppressReconnectUntil > Date.now();
+          stateRef.manualDisconnect = false;
           const statusCode = lastDisconnect?.error?.output?.statusCode;
           const reason =
             statusCode !== undefined ? DisconnectReason[statusCode] : "unknown";
@@ -194,6 +201,22 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
           );
 
           notifyQRClients(stateRef, { status: "disconnected", reason });
+
+          if (wasManualDisconnect) {
+            stateRef.sock = null;
+            stateRef.currentQR = null;
+            clearReconnectTimeout(stateRef);
+            await updateNotificationAccountStatus(stateRef.accountKey, {
+              estado: "desconectada",
+              touchDisconnected: true,
+            });
+            notifyQRClients(stateRef, {
+              status: "disconnected",
+              reason: "manual_disconnect",
+              requiresQr: true,
+            });
+            return;
+          }
 
           if (isSessionLost) {
             stateRef.connectionStatus = "session_lost";
@@ -275,6 +298,46 @@ export function listWhatsAppRuntimeAccounts() {
   return Array.from(sessions.keys()).map((accountKey) =>
     getWhatsAppAccountStatus(accountKey),
   );
+}
+
+export async function disconnectWhatsAppAccount(accountKey = DEFAULT_ACCOUNT_KEY) {
+  const stateRef = getSessionState(accountKey);
+  clearReconnectTimeout(stateRef);
+  stateRef.reconnectAttempts = 0;
+  stateRef.reconnectCooldownUntil = 0;
+  stateRef.currentQR = null;
+  stateRef.manualDisconnect = true;
+  stateRef.suppressReconnectUntil = Date.now() + 30000;
+
+  try {
+    stateRef.sock?.end?.();
+  } catch (err) {
+    logError("⚠️ No se pudo cerrar socket WhatsApp con end()", err, {
+      accountKey: stateRef.accountKey,
+    });
+  }
+
+  try {
+    stateRef.sock?.ws?.close?.();
+  } catch (err) {
+    logError("⚠️ No se pudo cerrar websocket WhatsApp", err, {
+      accountKey: stateRef.accountKey,
+    });
+  }
+
+  stateRef.sock = null;
+  stateRef.connectionStatus = "disconnected";
+  await clearSessionFiles(stateRef);
+  await updateNotificationAccountStatus(stateRef.accountKey, {
+    estado: "desconectada",
+    touchDisconnected: true,
+  });
+  notifyQRClients(stateRef, {
+    status: "disconnected",
+    reason: "manual_disconnect",
+    requiresQr: true,
+  });
+  stateRef.manualDisconnect = false;
 }
 
 /* ===== SSE helpers ===== */
