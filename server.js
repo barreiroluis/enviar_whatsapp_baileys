@@ -183,7 +183,15 @@ app.get("/health", async (req, res) => {
 });
 
 /* 🔲 QR en tiempo real (SSE) */
-app.get("/qr", (req, res) => {
+app.get("/qr", async (req, res) => {
+  try {
+    await initWhatsApp(getDefaultAccountKey());
+  } catch (err) {
+    logError("❌ Error inicializando cuenta default para QR", err, {
+      accountKey: getDefaultAccountKey(),
+    });
+  }
+
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
