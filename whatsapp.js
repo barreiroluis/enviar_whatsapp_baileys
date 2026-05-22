@@ -115,6 +115,15 @@ async function updateNotificationAccountStatus(
 
 export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
   const stateRef = getSessionState(accountKey);
+  if (stateRef.sock?.user && stateRef.connectionStatus === "connected") {
+    return;
+  }
+  if (
+    stateRef.sock &&
+    ["connecting", "qr"].includes(stateRef.connectionStatus)
+  ) {
+    return;
+  }
   if (stateRef.isInitializing) return;
   stateRef.isInitializing = true;
 
@@ -126,6 +135,7 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
       `🧩 WA ${stateRef.accountKey} version fija: ${WA_SOCKET_VERSION.join(".")}`,
     );
 
+    stateRef.connectionStatus = "connecting";
     stateRef.sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
