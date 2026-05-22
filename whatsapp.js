@@ -5,9 +5,11 @@ import makeWASocket, {
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import Pino from "pino";
+import { isMySQL, runQuery } from "./database.js";
 import { logError } from "./utils/logger.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
+const ID_EMPRESA = Number(process.env.ID_EMPRESA || 0);
 const LEGACY_SESSION_PATH = process.env.WA_SESSION_PATH || "./sessions";
 const MULTI_SESSION_ROOT =
   process.env.WA_MULTI_SESSION_ROOT || process.env.WA_SESSION_ROOT || "./sessions";
@@ -60,6 +62,57 @@ function getSessionState(accountKey = DEFAULT_ACCOUNT_KEY) {
   return sessions.get(key);
 }
 
+function extractConnectedPhone(sock) {
+  const raw = String(sock?.user?.id || "").split(":")[0] || "";
+  return raw.replace(/\D/g, "").slice(0, 40);
+}
+
+async function updateNotificationAccountStatus(
+  accountKey,
+  {
+    estado,
+    numero = null,
+    touchQr = false,
+    touchConnected = false,
+    touchDisconnected = false,
+  } = {},
+) {
+  if (!isMySQL || !ID_EMPRESA || !estado) return;
+  try {
+    await runQuery(
+      `
+      UPDATE whatsapp_notificacion_cuentas
+      SET estado = ?,
+          numero = COALESCE(NULLIF(?, ''), numero),
+          ultimo_qr_at = CASE WHEN ? = 1 THEN NOW() ELSE ultimo_qr_at END,
+          conectado_at = CASE WHEN ? = 1 THEN NOW() ELSE conectado_at END,
+          desconectado_at = CASE WHEN ? = 1 THEN NOW() ELSE desconectado_at END,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id_empresa = ?
+        AND account_key = ?
+        AND (fecha_baja IS NULL OR fecha_baja = '0000-00-00 00:00:00')
+      LIMIT 1
+      `,
+      [
+        estado,
+        numero || "",
+        touchQr ? 1 : 0,
+        touchConnected ? 1 : 0,
+        touchDisconnected ? 1 : 0,
+        ID_EMPRESA,
+        normalizeAccountKey(accountKey),
+      ],
+    );
+  } catch (err) {
+    if (err?.code !== "ER_NO_SUCH_TABLE") {
+      logError("❌ Error actualizando estado de cuenta WhatsApp", err, {
+        accountKey,
+        estado,
+      });
+    }
+  }
+}
+
 export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
   const stateRef = getSessionState(accountKey);
   if (stateRef.isInitializing) return;
@@ -93,6 +146,10 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
         if (qr) {
           stateRef.currentQR = qr;
           stateRef.connectionStatus = "qr";
+          await updateNotificationAccountStatus(stateRef.accountKey, {
+            estado: "pendiente_qr",
+            touchQr: true,
+          });
           console.log(`🔄 Nuevo QR generado (${stateRef.accountKey})`);
           notifyQRClients(stateRef, { status: "qr", qr });
         }
@@ -103,6 +160,11 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
           stateRef.reconnectAttempts = 0;
           stateRef.reconnectCooldownUntil = 0;
           clearReconnectTimeout(stateRef);
+          await updateNotificationAccountStatus(stateRef.accountKey, {
+            estado: "conectada",
+            numero: extractConnectedPhone(stateRef.sock),
+            touchConnected: true,
+          });
           console.log(`✅ WhatsApp conectado (${stateRef.accountKey})`);
           notifyQRClients(stateRef, { status: "connected" });
         }
@@ -127,11 +189,20 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
             stateRef.connectionStatus = "session_lost";
             stateRef.currentQR = null;
             clearReconnectTimeout(stateRef);
+            await updateNotificationAccountStatus(stateRef.accountKey, {
+              estado: "session_lost",
+              touchDisconnected: true,
+            });
             await clearSessionFiles(stateRef);
             notifyQRClients(stateRef, {
               status: "session_lost",
               reason,
               requiresQr: true,
+            });
+          } else {
+            await updateNotificationAccountStatus(stateRef.accountKey, {
+              estado: "desconectada",
+              touchDisconnected: true,
             });
           }
 
