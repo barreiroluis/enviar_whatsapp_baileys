@@ -1,7 +1,6 @@
 import express from "express";
 import {
   addQRClient,
-  clearSessionFiles,
   disconnectWhatsAppAccount,
   getDefaultAccountKey,
   getSock,
@@ -315,6 +314,7 @@ app.delete("/accounts/:accountKey", async (req, res) => {
   }
 
   try {
+    await disconnectWhatsAppAccount(accountKey);
     if (isMySQL && ID_EMPRESA) {
       await ensureNotificationAccountsSchema();
       await runQuery(
@@ -327,7 +327,6 @@ app.delete("/accounts/:accountKey", async (req, res) => {
         [ID_EMPRESA, accountKey],
       );
     }
-    await clearSessionFiles(accountKey);
     res.json({ ok: true, msg: "Cuenta desvinculada y sesión eliminada." });
   } catch (err) {
     logError("❌ Error eliminando cuenta WhatsApp notificación", err, {
