@@ -30,9 +30,28 @@ Por defecto levanta en `http://localhost:3000`.
 
 ## Endpoints
 
+- `GET /health`: estado general del servidor y cuentas cargadas
+- `GET /accounts`: lista cuentas de notificacion de la empresa
+- `POST /accounts`: crea una cuenta adicional de notificacion
+- `GET /accounts/:account_key/qr`: stream SSE con QR de una cuenta especifica
+- `DELETE /accounts/:account_key`: da de baja la cuenta y elimina su sesion local
 - `GET /qr`: stream SSE con el QR de vinculacion
 - `POST /send`: envio de mensaje
 - `POST /run-cron-now`: ejecucion manual del cron
+
+Compatibilidad:
+
+- `GET /qr` sigue usando la cuenta `default`.
+- `POST /send` sin `account_key` ni `id_sucursal` sigue usando la cuenta `default`.
+- La cuenta `default` mantiene `WA_SESSION_PATH`, por lo que las sesiones actuales no se mueven.
+- Las cuentas adicionales usan subcarpetas por `account_key`.
+
+Recordatorios:
+
+- El cron resuelve cuenta por `id_sucursal` cuando existe una cuenta activa asociada.
+- Si la cuenta de la sucursal no esta conectada, intenta enviar por `default`.
+- La auditoria guarda `account_key`, `id_sucursal` y `numero_emisor` cuando aplica.
+- Si falla un envio, se libera `recordatorio_lock` para no dejar el credito trabado.
 
 ## Manejo de sesiones perdidas
 
@@ -53,6 +72,7 @@ Estados SSE relevantes en `GET /qr`:
 Variables opcionales:
 
 - `WA_SESSION_PATH` (default `./sessions`)
+- `WA_MULTI_SESSION_ROOT` (default `./sessions`)
 - `WA_RECONNECT_DELAY_MS` (default `5000`)
 
 ## Seguridad para repositorio publico

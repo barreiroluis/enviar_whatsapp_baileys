@@ -11,11 +11,12 @@ export async function enviar_mensaje({
   adjunto = null,
   id_operador = 0, // cron = 0
   source = "system",
+  account_key = "default",
 }) {
-  const sock = getSock();
+  const sock = getSock(account_key);
 
   if (!sock || !sock.user) {
-    throw new Error("WhatsApp no conectado");
+    throw new Error(`WhatsApp no conectado (${account_key})`);
   }
 
   if (!to || !message) {
@@ -73,6 +74,7 @@ export async function enviar_mensaje({
 
   console.log("📤 Mensaje enviado", {
     source,
+    account_key,
     to: toCrmContact,
     id_msg,
     adjunto: Boolean(adjunto),
@@ -95,6 +97,7 @@ export async function enviar_mensaje({
         to_transport_jid: toCrmContact,
         chat_id_context: toCrmContact,
         numero_emisor_context: fromCrmContact,
+        account_key_context: account_key,
       },
     );
   }
@@ -102,5 +105,7 @@ export async function enviar_mensaje({
   return {
     msg: "Whatsapp Enviado",
     id_msg,
+    account_key,
+    numero_emisor: fromPhone,
   };
 }

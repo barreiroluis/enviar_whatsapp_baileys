@@ -88,6 +88,8 @@ export async function ensureRecordatorioAuditSchema(conn) {
       errores INT NOT NULL DEFAULT 0,
       omitidos INT NOT NULL DEFAULT 0,
       limite_alcanzado TINYINT(1) NOT NULL DEFAULT 0,
+      account_key VARCHAR(80) NULL,
+      id_sucursal INT NULL,
       error_message TEXT NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_empresa_fecha (id_empresa, fecha_local),
@@ -113,6 +115,9 @@ export async function ensureRecordatorioAuditSchema(conn) {
       dias_para_vencimiento INT NULL,
       deuda_total DECIMAL(14,2) NULL,
       id_msg VARCHAR(120) NULL,
+      account_key VARCHAR(80) NULL,
+      id_sucursal INT NULL,
+      numero_emisor VARCHAR(40) NULL,
       error_message TEXT NULL,
       audit_key CHAR(64) NULL,
       first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -129,6 +134,24 @@ export async function ensureRecordatorioAuditSchema(conn) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "account_key",
+    "account_key VARCHAR(80) NULL AFTER id_msg",
+  );
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "id_sucursal",
+    "id_sucursal INT NULL AFTER account_key",
+  );
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_detalle",
+    "numero_emisor",
+    "numero_emisor VARCHAR(40) NULL AFTER id_sucursal",
+  );
   await addColumnIfMissing(
     conn,
     "recordatorio_cron_detalle",
@@ -171,6 +194,18 @@ export async function ensureRecordatorioAuditSchema(conn) {
     "uk_recordatorio_detalle_dia",
     "UNIQUE KEY uk_recordatorio_detalle_dia (id_empresa, fecha_local, audit_key)",
   );
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_runs",
+    "account_key",
+    "account_key VARCHAR(80) NULL AFTER limite_alcanzado",
+  );
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_cron_runs",
+    "id_sucursal",
+    "id_sucursal INT NULL AFTER account_key",
+  );
 
   await conn.query(`
     CREATE TABLE IF NOT EXISTS recordatorio_owner_reportes (
@@ -180,6 +215,8 @@ export async function ensureRecordatorioAuditSchema(conn) {
       celular_owner VARCHAR(40) NULL,
       estado ENUM('pendiente', 'enviado', 'error', 'sin_owner') NOT NULL DEFAULT 'pendiente',
       id_msg VARCHAR(120) NULL,
+      account_key VARCHAR(80) NULL,
+      numero_emisor VARCHAR(40) NULL,
       resumen TEXT NULL,
       error_message TEXT NULL,
       sent_at DATETIME NULL,
@@ -188,6 +225,18 @@ export async function ensureRecordatorioAuditSchema(conn) {
       INDEX idx_estado (estado)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_owner_reportes",
+    "account_key",
+    "account_key VARCHAR(80) NULL AFTER id_msg",
+  );
+  await addColumnIfMissing(
+    conn,
+    "recordatorio_owner_reportes",
+    "numero_emisor",
+    "numero_emisor VARCHAR(40) NULL AFTER account_key",
+  );
 
   schemaReady = true;
 }
@@ -265,16 +314,22 @@ export async function insertRecordatorioDetalle(conn, detalle) {
         dias_para_vencimiento,
         deuda_total,
         id_msg,
+        account_key,
+        id_sucursal,
+        numero_emisor,
         error_message,
         audit_key
       )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       id_run = VALUES(id_run),
       celular = COALESCE(VALUES(celular), celular),
       nombre_cliente = COALESCE(VALUES(nombre_cliente), nombre_cliente),
       deuda_total = VALUES(deuda_total),
       id_msg = COALESCE(VALUES(id_msg), id_msg),
+      account_key = COALESCE(VALUES(account_key), account_key),
+      id_sucursal = COALESCE(VALUES(id_sucursal), id_sucursal),
+      numero_emisor = COALESCE(VALUES(numero_emisor), numero_emisor),
       error_message = COALESCE(VALUES(error_message), error_message),
       last_seen_at = CURRENT_TIMESTAMP,
       veces = veces + 1
@@ -296,6 +351,9 @@ export async function insertRecordatorioDetalle(conn, detalle) {
         : null,
       Number(detalle.deuda_total || 0) || 0,
       shortText(detalle.id_msg, 120) || null,
+      shortText(detalle.account_key, 80) || null,
+      Number(detalle.id_sucursal || 0) || null,
+      shortText(detalle.numero_emisor, 40) || null,
       detalle.error_message ? String(detalle.error_message).slice(0, 2000) : null,
       auditKey,
     ],
@@ -312,6 +370,8 @@ export function buildDetalleFromCredito({
   idMsg,
   errorMessage,
   fechaLocal,
+  accountKey,
+  numeroEmisor,
 }) {
   const fechaVencimiento = credito?.fecha_vencimiento
     ? moment(credito.fecha_vencimiento).format("YYYY-MM-DD")
@@ -332,6 +392,9 @@ export function buildDetalleFromCredito({
     dias_para_vencimiento: credito?.dias,
     deuda_total: credito?.total_deuda,
     id_msg: idMsg,
+    account_key: accountKey,
+    id_sucursal: Number(credito?.id_sucursal || 0) || null,
+    numero_emisor: numeroEmisor,
     error_message: errorMessage,
   };
 }
@@ -429,8 +492,19 @@ export async function upsertOwnerReporte(conn, data) {
     const result = await conn.query(
       `
       INSERT INTO recordatorio_owner_reportes
-        (id_empresa, fecha_local, celular_owner, estado, id_msg, resumen, error_message, sent_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (
+          id_empresa,
+          fecha_local,
+          celular_owner,
+          estado,
+          id_msg,
+          account_key,
+          numero_emisor,
+          resumen,
+          error_message,
+          sent_at
+        )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         data.id_empresa,
@@ -438,6 +512,8 @@ export async function upsertOwnerReporte(conn, data) {
         data.celular_owner || null,
         data.estado || "pendiente",
         data.id_msg || null,
+        data.account_key || null,
+        data.numero_emisor || null,
         data.resumen || null,
         data.error_message || null,
         data.sent_at || null,
@@ -453,6 +529,8 @@ export async function upsertOwnerReporte(conn, data) {
       celular_owner = COALESCE(?, celular_owner),
       estado = ?,
       id_msg = COALESCE(?, id_msg),
+      account_key = COALESCE(?, account_key),
+      numero_emisor = COALESCE(?, numero_emisor),
       resumen = COALESCE(?, resumen),
       error_message = ?,
       sent_at = COALESCE(?, sent_at)
@@ -462,6 +540,8 @@ export async function upsertOwnerReporte(conn, data) {
       data.celular_owner || null,
       data.estado || existing.estado,
       data.id_msg || null,
+      data.account_key || null,
+      data.numero_emisor || null,
       data.resumen || null,
       data.error_message || null,
       data.sent_at || null,

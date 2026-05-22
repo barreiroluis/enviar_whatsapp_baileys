@@ -32,7 +32,7 @@ import {
   shouldSendCredit,
 } from "./utils/recordatorio.js";
 import { resolveAppTimeZone } from "./utils/timezone.js";
-import { initWhatsApp, getSock } from "./whatsapp.js";
+import { initWhatsApp, getSock, getDefaultAccountKey } from "./whatsapp.js";
 
 setupConsoleLogging();
 
@@ -112,6 +112,55 @@ function formatDateForTemplate(dateValue) {
 
 function getResumenUrl(idCredito) {
   return `https://cuotafacil.com/cuotas.php?id=${idCredito}`;
+}
+
+function normalizeAccountKey(value = "") {
+  const safe = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .slice(0, 80);
+  return safe || "";
+}
+
+async function resolveNotificationAccountForSucursal(conn, idEmpresa, idSucursal) {
+  const defaultKey = getDefaultAccountKey();
+  const sucursalId = Number(idSucursal || 0);
+
+  if (sucursalId > 0) {
+    try {
+      const rows = await conn.query(
+        `
+        SELECT account_key
+        FROM whatsapp_notificacion_cuentas
+        WHERE id_empresa = ?
+          AND id_sucursal = ?
+          AND (fecha_baja IS NULL OR fecha_baja = '0000-00-00 00:00:00')
+        ORDER BY es_default ASC, id ASC
+        LIMIT 1
+        `,
+        [idEmpresa, sucursalId],
+      );
+      const accountKey = normalizeAccountKey(rows?.[0]?.account_key || "");
+      if (accountKey) {
+        await initWhatsApp(accountKey);
+        if (getSock(accountKey)?.user) {
+          return { accountKey, source: "sucursal" };
+        }
+        console.log(
+          `⏭️ Cuenta ${accountKey} asignada a sucursal ${sucursalId} no conectada. Usando default.`,
+        );
+      }
+    } catch (err) {
+      if (err?.code !== "ER_NO_SUCH_TABLE") {
+        logError("❌ Error resolviendo WhatsApp por sucursal", err, {
+          idEmpresa,
+          idSucursal: sucursalId,
+        });
+      }
+    }
+  }
+
+  return { accountKey: defaultKey, source: "default" };
 }
 
 function getLegacyTemplateCandidates() {
@@ -351,13 +400,9 @@ export async function procesarRecordatoriosCron() {
     }
 
     if (!getSock()?.user) {
-      console.log(`⏸️ Cron recordatorio omitido: WhatsApp no conectado`);
-      await finishRecordatorioRun(conn, idRun, {
-        finished_at: getDateTimeLocal(APP_TIME_ZONE),
-        status: "whatsapp_disconnected",
-        error_message: "WhatsApp no conectado",
-      });
-      return;
+      console.log(
+        `ℹ️ Cuenta default no conectada. Se intentará resolver una cuenta por sucursal antes de omitir cada envío.`,
+      );
     }
 
     const unlockResult = await conn.query(
@@ -387,6 +432,8 @@ export async function procesarRecordatoriosCron() {
           pe.nombre,
           pe.correo,
           pe.celular,
+          pe.id_sucursal,
+          su.nombre AS nombre_sucursal,
           em.nombre AS nombre_empresa,
           em.cbu_alias,
           cred.id AS id_credito,
@@ -408,6 +455,9 @@ export async function procesarRecordatoriosCron() {
           )
       LEFT JOIN empresas em
           ON em.id = pe.id_empresa
+      LEFT JOIN sucursales su
+          ON su.id = pe.id_sucursal
+          AND su.id_empresa = pe.id_empresa
       LEFT JOIN (
           SELECT
               art_ven.id_credito,
@@ -638,11 +688,17 @@ export async function procesarRecordatoriosCron() {
           continue;
         }
 
+        const cuentaNotificacion = await resolveNotificationAccountForSucursal(
+          conn,
+          ID_EMPRESA,
+          credito.id_sucursal,
+        );
         const resulEnvio = await enviar_mensaje({
           to: credito.celular,
           message: mensaje,
           id_operador: 0,
           source: "cron",
+          account_key: cuentaNotificacion.accountKey,
         });
 
         await conn.query(
@@ -665,6 +721,10 @@ export async function procesarRecordatoriosCron() {
           credito.nombre_empresa,
           "Cliente:",
           credito.nombre,
+          "Sucursal:",
+          credito.nombre_sucursal || credito.id_sucursal || "Global",
+          "Cuenta WA:",
+          resulEnvio?.account_key || "default",
           "Cel:",
           credito.celular,
         );
@@ -681,11 +741,21 @@ export async function procesarRecordatoriosCron() {
             estado: "enviado",
             motivo: "enviado",
             idMsg: resulEnvio?.id_msg,
+            accountKey: resulEnvio?.account_key || cuentaNotificacion.accountKey,
+            numeroEmisor: resulEnvio?.numero_emisor,
           }),
         );
         await sleep(700);
       } catch (err) {
         errores += 1;
+        await conn.query(
+          `
+          UPDATE creditos
+          SET recordatorio_lock = 0
+          WHERE id = ?
+          `,
+          [credito.id_credito],
+        );
         await insertRecordatorioDetalle(
           conn,
           buildDetalleFromCredito({
@@ -876,6 +946,8 @@ export async function enviarReporteDiarioRecordatoriosOwner() {
       celular_owner: celularOwner,
       estado: "enviado",
       id_msg: result?.id_msg,
+      account_key: result?.account_key || getDefaultAccountKey(),
+      numero_emisor: result?.numero_emisor,
       resumen: mensaje,
       sent_at: getDateTimeLocal(APP_TIME_ZONE),
     });
