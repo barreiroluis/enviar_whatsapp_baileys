@@ -345,19 +345,26 @@ export async function disconnectWhatsAppAccount(accountKey = DEFAULT_ACCOUNT_KEY
 export function addQRClient(res, accountKey = DEFAULT_ACCOUNT_KEY) {
   const stateRef = getSessionState(accountKey);
   stateRef.qrClients.add(res);
+  const basePayload = { account_key: stateRef.accountKey };
 
   if (stateRef.sock?.user || stateRef.connectionStatus === "connected") {
-    res.write(`data: ${JSON.stringify({ status: "connected" })}\n\n`);
+    res.write(
+      `data: ${JSON.stringify({ ...basePayload, status: "connected" })}\n\n`,
+    );
   } else if (stateRef.connectionStatus === "session_lost") {
     res.write(
-      `data: ${JSON.stringify({ status: "session_lost", requiresQr: true })}\n\n`,
+      `data: ${JSON.stringify({ ...basePayload, status: "session_lost", requiresQr: true })}\n\n`,
     );
   } else if (stateRef.connectionStatus === "disconnected") {
-    res.write(`data: ${JSON.stringify({ status: "disconnected" })}\n\n`);
+    res.write(
+      `data: ${JSON.stringify({ ...basePayload, status: "disconnected" })}\n\n`,
+    );
   }
 
   if (stateRef.currentQR) {
-    res.write(`data: ${JSON.stringify({ qr: stateRef.currentQR })}\n\n`);
+    res.write(
+      `data: ${JSON.stringify({ ...basePayload, qr: stateRef.currentQR })}\n\n`,
+    );
   }
 
   res.on("close", () => {
@@ -366,11 +373,15 @@ export function addQRClient(res, accountKey = DEFAULT_ACCOUNT_KEY) {
 }
 
 function notifyQRClients(stateRef, data) {
+  const payload = {
+    account_key: stateRef.accountKey,
+    ...data,
+  };
   console.log(
-    `[SSE] ${stateRef.accountKey} broadcast (${stateRef.qrClients.size} clientes) → ${JSON.stringify(data)}`,
+    `[SSE] ${stateRef.accountKey} broadcast (${stateRef.qrClients.size} clientes) → ${JSON.stringify(payload)}`,
   );
   for (const client of stateRef.qrClients) {
-    client.write(`data: ${JSON.stringify(data)}\n\n`);
+    client.write(`data: ${JSON.stringify(payload)}\n\n`);
   }
 }
 
