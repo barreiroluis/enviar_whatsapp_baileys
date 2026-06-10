@@ -346,7 +346,16 @@ app.delete("/accounts/:accountKey", async (req, res) => {
 
 /* 📤 Handler de envío */
 const sendWithApi = async (req, res) => {
-  const { to, message, adjunto, account_key, id_sucursal } = req.body;
+  const {
+    to,
+    message,
+    adjunto,
+    adjunto_tipo,
+    adjunto_mimetype,
+    adjunto_nombre,
+    account_key,
+    id_sucursal,
+  } = req.body;
   const respondSend = (status, payload) => {
     console.log("📡 Respuesta /send", {
       status,
@@ -404,6 +413,9 @@ const sendWithApi = async (req, res) => {
       to: toJid,
       message: cleanMessage,
       adjunto,
+      adjunto_tipo,
+      adjunto_mimetype,
+      adjunto_nombre,
       id_operador: 0, // cron / sistema
       source: "api-post",
       account_key: accountKey,

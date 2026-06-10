@@ -2,13 +2,16 @@ import { getSock } from "../whatsapp.js";
 import { saveMessageMysql } from "../adapter/mysql.js";
 import { cleanNumber, jidToPhone, toCrmJid } from "../utils/cleanNumber.js";
 import { getCurrentDateTime } from "../utils/date.js";
-import { getMediaTypeFromUrl, getFileNameFromUrl } from "../utils/media.js";
+import { resolveMediaFromUrl } from "../utils/media.js";
 import { resolveAppTimeZone } from "../utils/timezone.js";
 
 export async function enviar_mensaje({
   to,
   message,
   adjunto = null,
+  adjunto_tipo = null,
+  adjunto_mimetype = null,
+  adjunto_nombre = null,
   id_operador = 0, // cron = 0
   source = "system",
   account_key = "default",
@@ -50,19 +53,24 @@ export async function enviar_mensaje({
 
   // 📎 CON ADJUNTO (URL)
   if (adjunto) {
-    const mediaType = getMediaTypeFromUrl(adjunto);
+    const { mediaType, mimetype, fileName } = await resolveMediaFromUrl(adjunto, {
+      mediaType: adjunto_tipo,
+      mimetype: adjunto_mimetype,
+      fileName: adjunto_nombre,
+    });
 
     if (!mediaType) {
       throw new Error("Tipo de adjunto no soportado");
     }
 
-    const fileName = getFileNameFromUrl(adjunto);
-
-    sentMessage = await sock.sendMessage(toJid, {
+    const payload = {
       [mediaType]: { url: adjunto },
       fileName: mediaType === "document" ? fileName : undefined,
+      mimetype: mimetype || undefined,
       caption: message?.trim() || undefined,
-    });
+    };
+
+    sentMessage = await sock.sendMessage(toJid, payload);
   } else {
     // 📩 SOLO TEXTO
     sentMessage = await sock.sendMessage(toJid, {
