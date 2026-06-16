@@ -40,15 +40,8 @@ export function calcularDiasHastaVencimiento(
 export function describirEstadoVencimiento(dias) {
   if (dias < 0) {
     const diasVencido = Math.abs(dias);
-    if (diasVencido >= 365) {
-      const years = Math.floor(diasVencido / 365);
-      const remainingDays = diasVencido % 365;
-      const months = Math.floor(remainingDays / 30);
-      const yearsLabel = `${years} ${years === 1 ? "año" : "años"}`;
-      if (months > 0) {
-        return `Vencido hace ${yearsLabel} y ${months} ${months === 1 ? "mes" : "meses"}`;
-      }
-      return `Vencido hace ${yearsLabel}`;
+    if (diasVencido > 90) {
+      return "Tiene cuotas pendientes";
     }
 
     if (diasVencido >= 30) {

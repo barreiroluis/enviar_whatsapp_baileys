@@ -31,9 +31,11 @@ test("usa config por defecto para 3, 1, hoy y vencidos", () => {
   assert.equal(config.templates.events.overdue.enabled, 1);
 });
 
-test("humaniza vencidos largos en meses y años", () => {
+test("humaniza vencidos hasta 3 meses y neutraliza vencidos largos", () => {
   assert.equal(describirEstadoVencimiento(-45), "Vencido hace 1 mes");
-  assert.equal(describirEstadoVencimiento(-1436), "Vencido hace 3 años y 11 meses");
+  assert.equal(describirEstadoVencimiento(-90), "Vencido hace 3 meses");
+  assert.equal(describirEstadoVencimiento(-91), "Tiene cuotas pendientes");
+  assert.equal(describirEstadoVencimiento(-1436), "Tiene cuotas pendientes");
 });
 
 test("envia vencidos cuando ya corresponde el primer aviso", () => {
