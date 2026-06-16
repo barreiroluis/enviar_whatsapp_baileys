@@ -544,7 +544,28 @@ export async function procesarRecordatoriosCron() {
       HAVING
           deuda.sum_valor > 0
           AND deuda.fecha_vencimiento <= DATE_ADD(CURDATE(), INTERVAL 3 DAY)
-      ORDER BY deuda.fecha_vencimiento ASC, cred.id ASC
+      ORDER BY
+          CASE
+              WHEN deuda.fecha_vencimiento = CURDATE() THEN 0
+              WHEN deuda.fecha_vencimiento = DATE_ADD(CURDATE(), INTERVAL 1 DAY) THEN 1
+              WHEN deuda.fecha_vencimiento = DATE_ADD(CURDATE(), INTERVAL 3 DAY) THEN 2
+              WHEN deuda.fecha_vencimiento < CURDATE()
+                   AND cred.recordatorio_update IS NULL THEN 3
+              WHEN deuda.fecha_vencimiento < CURDATE() THEN 4
+              ELSE 5
+          END ASC,
+          CASE
+              WHEN deuda.fecha_vencimiento < CURDATE()
+                   AND cred.recordatorio_update IS NULL THEN deuda.fecha_vencimiento
+              ELSE NULL
+          END DESC,
+          CASE
+              WHEN deuda.fecha_vencimiento < CURDATE()
+                   AND cred.recordatorio_update IS NOT NULL THEN cred.recordatorio_update
+              ELSE NULL
+          END ASC,
+          deuda.fecha_vencimiento ASC,
+          cred.id ASC
       `,
       [ID_EMPRESA],
     );
