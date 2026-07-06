@@ -1,6 +1,7 @@
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
+  proto,
 } from "@whiskeysockets/baileys";
 import { rm } from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +27,11 @@ const RECONNECT_COOLDOWN_MS = Number(
 const RECONNECT_JITTER_RATIO = 0.2;
 const WA_SOCKET_VERSION = [2, 3000, 1033893291];
 const WA_BAILEYS_LOG_LEVEL = process.env.WA_BAILEYS_LOG_LEVEL || "silent";
+const WA_MESSAGE_STATUS_LOG = ["1", "true", "yes", "on"].includes(
+  String(process.env.WHATSAPP_MESSAGE_STATUS_LOG ?? "1")
+    .trim()
+    .toLowerCase(),
+);
 
 const sessions = new Map();
 
@@ -67,6 +73,27 @@ function getSessionState(accountKey = DEFAULT_ACCOUNT_KEY) {
 function extractConnectedPhone(sock) {
   const raw = String(sock?.user?.id || "").split(":")[0] || "";
   return raw.replace(/\D/g, "").slice(0, 40);
+}
+
+function getMessageStatusName(status) {
+  if (status == null) return null;
+  return proto.WebMessageInfo.Status[status] || String(status);
+}
+
+function logOutgoingMessageStatus(accountKey, { key, update }) {
+  if (!WA_MESSAGE_STATUS_LOG || !key?.fromMe) return;
+
+  const status = getMessageStatusName(update?.status);
+  if (!status && !update?.messageStubType) return;
+
+  console.log("📬 Estado mensaje WhatsApp", {
+    account_key: accountKey,
+    id_msg: key.id || null,
+    to: key.remoteJid || null,
+    status,
+    status_code: update?.status ?? null,
+    stub_type: update?.messageStubType ?? null,
+  });
 }
 
 async function updateNotificationAccountStatus(
@@ -151,6 +178,12 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
     });
 
     stateRef.sock.ev.on("creds.update", saveCreds);
+
+    stateRef.sock.ev.on("messages.update", (updates = []) => {
+      for (const update of updates) {
+        logOutgoingMessageStatus(stateRef.accountKey, update);
+      }
+    });
 
     stateRef.sock.ev.on(
       "connection.update",

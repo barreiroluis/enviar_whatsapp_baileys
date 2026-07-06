@@ -114,19 +114,6 @@ function getResumenUrl(idCredito) {
   return `https://cuotafacil.com/cuotas.php?id=${idCredito}`;
 }
 
-function buildResumenInteractiveButtons(resumenUrl) {
-  const url = String(resumenUrl || "").trim();
-  if (!/^https?:\/\//i.test(url)) return [];
-
-  return [
-    {
-      type: "url",
-      label: "Ver Resumen",
-      url,
-    },
-  ];
-}
-
 function normalizeAccountKey(value = "") {
   const safe = String(value || "")
     .trim()
@@ -739,9 +726,6 @@ export async function procesarRecordatoriosCron() {
           id_operador: 0,
           source: "cron",
           account_key: cuentaNotificacion.accountKey,
-          interactive_buttons: buildResumenInteractiveButtons(
-            recordatorio.variables.resumen_url,
-          ),
         });
 
         await conn.query(
