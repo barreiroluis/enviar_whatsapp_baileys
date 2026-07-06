@@ -1,9 +1,150 @@
+import { generateWAMessageFromContent, proto } from "@whiskeysockets/baileys";
 import { getSock } from "../whatsapp.js";
 import { saveMessageMysql } from "../adapter/mysql.js";
 import { cleanNumber, jidToPhone, toCrmJid } from "../utils/cleanNumber.js";
 import { getCurrentDateTime } from "../utils/date.js";
 import { resolveMediaFromUrl } from "../utils/media.js";
 import { resolveAppTimeZone } from "../utils/timezone.js";
+
+function parseInteractiveButtons(input = []) {
+  if (!input) return [];
+  if (Array.isArray(input)) return input;
+
+  if (typeof input === "string") {
+    const cleanInput = input.trim();
+    if (!cleanInput) return [];
+
+    try {
+      const parsed = JSON.parse(cleanInput);
+      return parseInteractiveButtons(parsed);
+    } catch {
+      return [];
+    }
+  }
+
+  if (typeof input === "object") {
+    if (Array.isArray(input.buttons)) return input.buttons;
+    if (Array.isArray(input.items)) return input.items;
+    return [input];
+  }
+
+  return [];
+}
+
+function normalizeInteractiveButtons(input = []) {
+  return parseInteractiveButtons(input)
+    .map((button, index) => {
+      if (!button || typeof button !== "object") return null;
+
+      const type = String(button.type || button.tipo || "").trim().toLowerCase();
+      const isCopyButton =
+        type === "copy" ||
+        type === "copiar" ||
+        type === "cta_copy" ||
+        button.copy_code != null;
+      const isUrlButton =
+        type === "url" ||
+        type === "link" ||
+        type === "enlace" ||
+        type === "cta_url" ||
+        button.url != null ||
+        button.href != null;
+
+      if (!isCopyButton && !isUrlButton) return null;
+
+      const value = isUrlButton
+        ? String(button.url ?? button.href ?? button.value ?? "").trim()
+        : String(
+            button.value ??
+              button.copy_code ??
+              button.codigo ??
+              button.numero_operacion ??
+              button.numeroOperacion ??
+              button.operation_number ??
+              button.operationNumber ??
+              "",
+          ).trim();
+
+      if (!value) return null;
+      if (isUrlButton && !/^https?:\/\//i.test(value)) return null;
+
+      const label = String(
+        button.label ??
+          button.text ??
+          button.display_text ??
+          button.displayText ??
+          button.buttonText ??
+          "",
+      )
+        .trim()
+        .slice(0, 40);
+
+      const buttonType = isUrlButton ? "url" : "copy";
+      const safeId = String(button.id || `${buttonType}_${index}_${value}`)
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .slice(0, 80);
+
+      return {
+        type: buttonType,
+        id: safeId || `${buttonType}_${index}`,
+        label: label || (isUrlButton ? "Abrir enlace" : "Copiar"),
+        value,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function buildNativeFlowInfo(button) {
+  if (button.type === "url") {
+    return {
+      name: "cta_url",
+      paramsJson: JSON.stringify({
+        display_text: button.label,
+        id: button.id,
+        url: button.value,
+        merchant_url: button.value,
+      }),
+    };
+  }
+
+  return {
+    name: "cta_copy",
+    paramsJson: JSON.stringify({
+      display_text: button.label,
+      id: button.id,
+      copy_code: button.value,
+    }),
+  };
+}
+
+async function enviarMensajeConBotonesInteractivos(sock, toJid, message, buttons) {
+  const nativeButtons = buttons.map((button) => ({
+    buttonId: button.id,
+    buttonText: { displayText: button.label },
+    type: proto.Message.ButtonsMessage.Button.Type.NATIVE_FLOW,
+    nativeFlowInfo: buildNativeFlowInfo(button),
+  }));
+
+  const content = {
+    buttonsMessage: proto.Message.ButtonsMessage.create({
+      contentText: message.trim(),
+      footerText: "Tocá el botón para continuar.",
+      headerType: proto.Message.ButtonsMessage.HeaderType.EMPTY,
+      buttons: nativeButtons,
+    }),
+  };
+
+  const waMessage = generateWAMessageFromContent(toJid, content, {
+    userJid: sock.user.id,
+  });
+
+  await sock.relayMessage(toJid, waMessage.message, {
+    messageId: waMessage.key.id,
+  });
+
+  return waMessage;
+}
 
 export async function enviar_mensaje({
   to,
@@ -15,6 +156,7 @@ export async function enviar_mensaje({
   id_operador = 0, // cron = 0
   source = "system",
   account_key = "default",
+  interactive_buttons = [],
 }) {
   const sock = getSock(account_key);
 
@@ -50,6 +192,9 @@ export async function enviar_mensaje({
 
   // 📎 Media (pendiente)
   let sentMessage;
+  const interactiveButtons = !adjunto
+    ? normalizeInteractiveButtons(interactive_buttons)
+    : [];
 
   // 📎 CON ADJUNTO (URL)
   if (adjunto) {
@@ -71,6 +216,25 @@ export async function enviar_mensaje({
     };
 
     sentMessage = await sock.sendMessage(toJid, payload);
+  } else if (interactiveButtons.length) {
+    try {
+      sentMessage = await enviarMensajeConBotonesInteractivos(
+        sock,
+        toJid,
+        message,
+        interactiveButtons,
+      );
+    } catch (error) {
+      console.warn("⚠️ No se pudieron enviar botones interactivos. Se envía texto plano.", {
+        account_key,
+        to: toCrmContact,
+        botones_interactivos: interactiveButtons.length,
+        error: error?.message || String(error),
+      });
+      sentMessage = await sock.sendMessage(toJid, {
+        text: message.trim(),
+      });
+    }
   } else {
     // 📩 SOLO TEXTO
     sentMessage = await sock.sendMessage(toJid, {
@@ -86,6 +250,7 @@ export async function enviar_mensaje({
     to: toCrmContact,
     id_msg,
     adjunto: Boolean(adjunto),
+    botones_interactivos: interactiveButtons.length,
     message: message.trim(),
     timestamp: getCurrentDateTime(),
     timezone: resolveAppTimeZone(),

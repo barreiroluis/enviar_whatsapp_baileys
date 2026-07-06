@@ -355,6 +355,8 @@ const sendWithApi = async (req, res) => {
     adjunto_nombre,
     account_key,
     id_sucursal,
+    interactive_buttons,
+    botones_interactivos,
   } = req.body;
   const respondSend = (status, payload) => {
     console.log("📡 Respuesta /send", {
@@ -419,6 +421,7 @@ const sendWithApi = async (req, res) => {
       id_operador: 0, // cron / sistema
       source: "api-post",
       account_key: accountKey,
+      interactive_buttons: interactive_buttons ?? botones_interactivos,
     });
 
     return respondSend(200, {

@@ -114,6 +114,19 @@ function getResumenUrl(idCredito) {
   return `https://cuotafacil.com/cuotas.php?id=${idCredito}`;
 }
 
+function buildResumenInteractiveButtons(resumenUrl) {
+  const url = String(resumenUrl || "").trim();
+  if (!/^https?:\/\//i.test(url)) return [];
+
+  return [
+    {
+      type: "url",
+      label: "Ver Resumen",
+      url,
+    },
+  ];
+}
+
 function normalizeAccountKey(value = "") {
   const safe = String(value || "")
     .trim()
@@ -329,13 +342,18 @@ function buildRecordatorioVariables(row, dias, empresaConfig) {
 }
 
 function generarMensajeDesdePlantilla(row, dias, empresaConfig) {
+  return generarRecordatorioDesdePlantilla(row, dias, empresaConfig).mensaje;
+}
+
+function generarRecordatorioDesdePlantilla(row, dias, empresaConfig) {
   const eventKey = getRecordatorioEventKey(dias, empresaConfig);
   const template = empresaConfig.templates.events[eventKey]?.template || "";
+  const variables = buildRecordatorioVariables(row, dias, empresaConfig);
 
-  return renderTemplate(
-    template,
-    buildRecordatorioVariables(row, dias, empresaConfig),
-  ).trim();
+  return {
+    mensaje: renderTemplate(template, variables).trim(),
+    variables,
+  };
 }
 
 export async function procesarRecordatoriosCron() {
@@ -680,11 +698,12 @@ export async function procesarRecordatoriosCron() {
           continue;
         }
 
-        const mensaje = generarMensajeDesdePlantilla(
+        const recordatorio = generarRecordatorioDesdePlantilla(
           credito,
           credito.dias,
           empresaConfig,
         );
+        const mensaje = recordatorio.mensaje;
         if (!mensaje) {
           await conn.query(
             `
@@ -720,6 +739,9 @@ export async function procesarRecordatoriosCron() {
           id_operador: 0,
           source: "cron",
           account_key: cuentaNotificacion.accountKey,
+          interactive_buttons: buildResumenInteractiveButtons(
+            recordatorio.variables.resumen_url,
+          ),
         });
 
         await conn.query(
