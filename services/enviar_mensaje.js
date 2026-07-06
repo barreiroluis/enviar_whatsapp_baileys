@@ -99,7 +99,7 @@ function buildNativeFlowInfo(button) {
   if (button.type === "url") {
     return {
       name: "cta_url",
-      paramsJson: JSON.stringify({
+      buttonParamsJson: JSON.stringify({
         display_text: button.label,
         id: button.id,
         url: button.value,
@@ -110,7 +110,7 @@ function buildNativeFlowInfo(button) {
 
   return {
     name: "cta_copy",
-    paramsJson: JSON.stringify({
+    buttonParamsJson: JSON.stringify({
       display_text: button.label,
       id: button.id,
       copy_code: button.value,
@@ -118,21 +118,57 @@ function buildNativeFlowInfo(button) {
   };
 }
 
+function getInteractiveButtonsMode() {
+  return String(process.env.WHATSAPP_INTERACTIVE_BUTTONS_MODE || "text")
+    .trim()
+    .toLowerCase();
+}
+
+function shouldTryNativeInteractiveButtons() {
+  return ["native", "interactive", "true", "1"].includes(
+    getInteractiveButtonsMode(),
+  );
+}
+
+function appendInteractiveButtonsAsText(message, buttons) {
+  const baseMessage = message.trim();
+  const missingButtonLines = buttons
+    .filter((button) => !baseMessage.includes(button.value))
+    .map((button) => `${button.label}: ${button.value}`);
+
+  if (!missingButtonLines.length) return baseMessage;
+
+  return `${baseMessage}\n\nAcciones:\n${missingButtonLines.join("\n")}`;
+}
+
 async function enviarMensajeConBotonesInteractivos(sock, toJid, message, buttons) {
-  const nativeButtons = buttons.map((button) => ({
-    buttonId: button.id,
-    buttonText: { displayText: button.label },
-    type: proto.Message.ButtonsMessage.Button.Type.NATIVE_FLOW,
-    nativeFlowInfo: buildNativeFlowInfo(button),
-  }));
+  const nativeButtons = buttons.map((button) => buildNativeFlowInfo(button));
 
   const content = {
-    buttonsMessage: proto.Message.ButtonsMessage.create({
-      contentText: message.trim(),
-      footerText: "Tocá el botón para continuar.",
-      headerType: proto.Message.ButtonsMessage.HeaderType.EMPTY,
-      buttons: nativeButtons,
-    }),
+    viewOnceMessage: {
+      message: {
+        messageContextInfo: {
+          deviceListMetadata: {},
+          deviceListMetadataVersion: 2,
+        },
+        interactiveMessage: proto.Message.InteractiveMessage.create({
+          body: proto.Message.InteractiveMessage.Body.create({
+            text: message.trim(),
+          }),
+          footer: proto.Message.InteractiveMessage.Footer.create({
+            text: "Tocá el botón para continuar.",
+          }),
+          header: proto.Message.InteractiveMessage.Header.create({
+            hasMediaAttachment: false,
+          }),
+          nativeFlowMessage:
+            proto.Message.InteractiveMessage.NativeFlowMessage.create({
+              buttons: nativeButtons,
+              messageVersion: 1,
+            }),
+        }),
+      },
+    },
   };
 
   const waMessage = generateWAMessageFromContent(toJid, content, {
@@ -192,6 +228,8 @@ export async function enviar_mensaje({
 
   // 📎 Media (pendiente)
   let sentMessage;
+  let sentMessageText = message.trim();
+  let interactiveMode = "none";
   const interactiveButtons = !adjunto
     ? normalizeInteractiveButtons(interactive_buttons)
     : [];
@@ -217,28 +255,47 @@ export async function enviar_mensaje({
 
     sentMessage = await sock.sendMessage(toJid, payload);
   } else if (interactiveButtons.length) {
-    try {
-      sentMessage = await enviarMensajeConBotonesInteractivos(
-        sock,
-        toJid,
+    // Baileys puede aceptar botones nativos y WhatsApp descartarlos sin error.
+    // Por defecto priorizamos entregar el texto normal.
+    if (shouldTryNativeInteractiveButtons()) {
+      try {
+        sentMessage = await enviarMensajeConBotonesInteractivos(
+          sock,
+          toJid,
+          message,
+          interactiveButtons,
+        );
+        interactiveMode = "native";
+      } catch (error) {
+        console.warn(
+          "⚠️ No se pudieron enviar botones interactivos. Se envía texto plano.",
+          {
+            account_key,
+            to: toCrmContact,
+            botones_interactivos: interactiveButtons.length,
+            error: error?.message || String(error),
+          },
+        );
+      }
+    }
+
+    if (!sentMessage) {
+      sentMessageText = appendInteractiveButtonsAsText(
         message,
         interactiveButtons,
       );
-    } catch (error) {
-      console.warn("⚠️ No se pudieron enviar botones interactivos. Se envía texto plano.", {
-        account_key,
-        to: toCrmContact,
-        botones_interactivos: interactiveButtons.length,
-        error: error?.message || String(error),
-      });
+      interactiveMode =
+        sentMessageText === message.trim()
+          ? "text"
+          : "text_with_button_values";
       sentMessage = await sock.sendMessage(toJid, {
-        text: message.trim(),
+        text: sentMessageText,
       });
     }
   } else {
     // 📩 SOLO TEXTO
     sentMessage = await sock.sendMessage(toJid, {
-      text: message.trim(),
+      text: sentMessageText,
     });
   }
 
@@ -251,7 +308,8 @@ export async function enviar_mensaje({
     id_msg,
     adjunto: Boolean(adjunto),
     botones_interactivos: interactiveButtons.length,
-    message: message.trim(),
+    interactive_mode: interactiveMode,
+    message: sentMessageText,
     timestamp: getCurrentDateTime(),
     timezone: resolveAppTimeZone(),
   });
@@ -261,7 +319,7 @@ export async function enviar_mensaje({
     await saveMessageMysql(
       fromCrmContact,
       toCrmContact,
-      message.trim(),
+      sentMessageText,
       null,
       id_msg,
       "",
@@ -280,5 +338,6 @@ export async function enviar_mensaje({
     id_msg,
     account_key,
     numero_emisor: fromPhone,
+    interactive_mode: interactiveMode,
   };
 }

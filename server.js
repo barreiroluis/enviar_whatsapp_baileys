@@ -429,6 +429,7 @@ const sendWithApi = async (req, res) => {
       msg: result.msg, // "Whatsapp Enviado"
       id_msg: result.id_msg,
       account_key: accountKey,
+      interactive_mode: result.interactive_mode,
     });
   } catch (error) {
     logError("❌ Error en /send", error, { to });
