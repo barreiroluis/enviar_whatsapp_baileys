@@ -344,14 +344,6 @@ app.delete("/accounts/:accountKey", async (req, res) => {
   }
 });
 
-function hasInteractiveButtonsPayload(input = null) {
-  if (!input) return false;
-  if (Array.isArray(input)) return input.length > 0;
-  if (typeof input === "string") return input.trim().length > 0;
-  if (typeof input === "object") return Object.keys(input).length > 0;
-  return true;
-}
-
 /* 📤 Handler de envío */
 const sendWithApi = async (req, res) => {
   const {
@@ -363,8 +355,6 @@ const sendWithApi = async (req, res) => {
     adjunto_nombre,
     account_key,
     id_sucursal,
-    interactive_buttons,
-    botones_interactivos,
   } = req.body;
   const respondSend = (status, payload) => {
     console.log("📡 Respuesta /send", {
@@ -409,20 +399,6 @@ const sendWithApi = async (req, res) => {
     }
 
     const accountKey = await resolveAccountKey({ account_key, id_sucursal });
-    const interactiveButtonsPayload = interactive_buttons ?? botones_interactivos;
-    const interactiveButtonsIgnored = hasInteractiveButtonsPayload(
-      interactiveButtonsPayload,
-    );
-
-    if (interactiveButtonsIgnored) {
-      console.log("ℹ️ /send recibió botones interactivos; se ignoran", {
-        account_key: accountKey,
-        to: toJid,
-        reason:
-          "Baileys no garantiza entrega/visualización de botones nativos; se envía solo texto para evitar rechazos de WhatsApp.",
-      });
-    }
-
     await initWhatsApp(accountKey);
 
     if (!getSock(accountKey)?.user) {
@@ -450,7 +426,6 @@ const sendWithApi = async (req, res) => {
       msg: result.msg, // "Whatsapp Enviado"
       id_msg: result.id_msg,
       account_key: accountKey,
-      interactive_buttons_ignored: interactiveButtonsIgnored,
     });
   } catch (error) {
     logError("❌ Error en /send", error, { to });
