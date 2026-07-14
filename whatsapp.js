@@ -1,6 +1,7 @@
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
+  fetchLatestWaWebVersion,
   proto,
 } from "@whiskeysockets/baileys";
 import { rm } from "node:fs/promises";
@@ -25,7 +26,7 @@ const RECONNECT_COOLDOWN_MS = Number(
   process.env.WA_RECONNECT_COOLDOWN_MS || 300000,
 );
 const RECONNECT_JITTER_RATIO = 0.2;
-const WA_SOCKET_VERSION = [2, 3000, 1033893291];
+const WA_SOCKET_VERSION_FALLBACK = [2, 3000, 1043126001];
 const WA_BAILEYS_LOG_LEVEL = process.env.WA_BAILEYS_LOG_LEVEL || "silent";
 const WA_MESSAGE_STATUS_LOG = ["1", "true", "yes", "on"].includes(
   String(process.env.WHATSAPP_MESSAGE_STATUS_LOG ?? "1")
@@ -34,6 +35,7 @@ const WA_MESSAGE_STATUS_LOG = ["1", "true", "yes", "on"].includes(
 );
 
 const sessions = new Map();
+let cachedWASocketVersion = null;
 
 function normalizeAccountKey(accountKey = DEFAULT_ACCOUNT_KEY) {
   const raw = String(accountKey || DEFAULT_ACCOUNT_KEY).trim();
@@ -73,6 +75,72 @@ function getSessionState(accountKey = DEFAULT_ACCOUNT_KEY) {
 function extractConnectedPhone(sock) {
   const raw = String(sock?.user?.id || "").split(":")[0] || "";
   return raw.replace(/\D/g, "").slice(0, 40);
+}
+
+function formatWASocketVersion(version) {
+  return Array.isArray(version) ? version.join(".") : "";
+}
+
+function parseWASocketVersion(value = "") {
+  const parts = String(value || "")
+    .trim()
+    .split(/[.,]/)
+    .map((part) => Number(part.trim()));
+
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) {
+    return null;
+  }
+
+  return parts;
+}
+
+async function resolveWASocketVersion() {
+  const envVersion = parseWASocketVersion(process.env.WA_SOCKET_VERSION || "");
+  if (envVersion) {
+    return { version: envVersion, source: "env", isLatest: null };
+  }
+
+  if (cachedWASocketVersion) {
+    return { version: cachedWASocketVersion, source: "cache", isLatest: true };
+  }
+
+  const latest = await fetchLatestWaWebVersion();
+  if (latest?.isLatest && Array.isArray(latest.version)) {
+    cachedWASocketVersion = latest.version;
+    return { version: latest.version, source: "web", isLatest: true };
+  }
+
+  if (latest?.error) {
+    console.warn("⚠️ No se pudo obtener la última versión WA Web", {
+      error: latest.error?.message || String(latest.error),
+    });
+  }
+
+  return {
+    version: WA_SOCKET_VERSION_FALLBACK,
+    source: "fallback",
+    isLatest: false,
+  };
+}
+
+function getDisconnectReason(statusCode) {
+  if (statusCode === undefined || statusCode === null) return "unknown";
+  return DisconnectReason[statusCode] || `status_${statusCode}`;
+}
+
+function shouldResetSessionOnDisconnect(statusCode, reason) {
+  return (
+    [
+      DisconnectReason.loggedOut,
+      DisconnectReason.badSession,
+      DisconnectReason.forbidden,
+      DisconnectReason.multideviceMismatch,
+      405,
+    ].includes(statusCode) ||
+    ["loggedOut", "badSession", "forbidden", "multideviceMismatch"].includes(
+      reason,
+    )
+  );
 }
 
 function getMessageStatusName(status) {
@@ -155,20 +223,22 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
   }
   if (stateRef.isInitializing) return;
   stateRef.isInitializing = true;
+  clearReconnectTimeout(stateRef);
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(
       stateRef.sessionPath,
     );
+    const waVersion = await resolveWASocketVersion();
     console.log(
-      `🧩 WA ${stateRef.accountKey} version fija: ${WA_SOCKET_VERSION.join(".")}`,
+      `🧩 WA ${stateRef.accountKey} version ${waVersion.source}: ${formatWASocketVersion(waVersion.version)}`,
     );
 
     stateRef.connectionStatus = "connecting";
     stateRef.sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      version: WA_SOCKET_VERSION,
+      version: waVersion.version,
       logger: Pino({ level: WA_BAILEYS_LOG_LEVEL }),
       syncFullHistory: false,
       browser: ["Windows", "Google Chrome", "145.0.0"],
@@ -222,10 +292,11 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
             stateRef.suppressReconnectUntil > Date.now();
           stateRef.manualDisconnect = false;
           const statusCode = lastDisconnect?.error?.output?.statusCode;
-          const reason =
-            statusCode !== undefined ? DisconnectReason[statusCode] : "unknown";
-          const isSessionLost =
-            statusCode === DisconnectReason.loggedOut || reason === "loggedOut";
+          const reason = getDisconnectReason(statusCode);
+          const isSessionLost = shouldResetSessionOnDisconnect(
+            statusCode,
+            reason,
+          );
 
           logError(
             `⚠️ WhatsApp desconectado (${stateRef.accountKey})`,
