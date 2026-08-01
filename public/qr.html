@@ -63,8 +63,20 @@
           return;
         }
 
-        if (data.status === "qr" || data.status === "session_lost") {
+        if (data.status === "qr") {
           setStatus("📷 Escaneá el QR con WhatsApp");
+          return;
+        }
+
+        if (data.status === "session_lost") {
+          hideQr();
+          setStatus("⚠️ Sesión inválida. La autenticación fue conservada; se requiere un reinicio manual de sesión.");
+          return;
+        }
+
+        if (data.status === "qr_expired") {
+          hideQr();
+          setStatus("⌛ QR vencido. Volvé a solicitar el QR para continuar.");
           return;
         }
 

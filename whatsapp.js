@@ -67,6 +67,12 @@ function getSessionState(accountKey = DEFAULT_ACCOUNT_KEY) {
       manualDisconnect: false,
       suppressReconnectUntil: 0,
       qrClients: new Set(),
+      socketGeneration: 0,
+      lastDisconnect: null,
+      lastConnectedAt: null,
+      lastQrAt: null,
+      lastMessageAt: null,
+      lastOutgoingAt: null,
     });
   }
   return sessions.get(key);
@@ -128,7 +134,7 @@ function getDisconnectReason(statusCode) {
   return DisconnectReason[statusCode] || `status_${statusCode}`;
 }
 
-function shouldResetSessionOnDisconnect(statusCode, reason) {
+function isSessionInvalidOnDisconnect(statusCode, reason) {
   return (
     [
       DisconnectReason.loggedOut,
@@ -141,6 +147,14 @@ function shouldResetSessionOnDisconnect(statusCode, reason) {
       reason,
     )
   );
+}
+
+function isQRTimeout(statusCode, reason) {
+  return statusCode === DisconnectReason.timedOut || reason === "timedOut";
+}
+
+function isCurrentSocket(stateRef, sock, generation) {
+  return stateRef.sock === sock && stateRef.socketGeneration === generation;
 }
 
 function getMessageStatusName(status) {
@@ -221,6 +235,9 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
   ) {
     return;
   }
+  if (stateRef.connectionStatus === "session_lost") {
+    return;
+  }
   if (stateRef.isInitializing) return;
   stateRef.isInitializing = true;
   clearReconnectTimeout(stateRef);
@@ -235,7 +252,9 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
     );
 
     stateRef.connectionStatus = "connecting";
-    stateRef.sock = makeWASocket({
+    const socketGeneration = stateRef.socketGeneration + 1;
+    stateRef.socketGeneration = socketGeneration;
+    const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
       version: waVersion.version,
@@ -246,21 +265,27 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
       shouldSyncHistoryMessage: () => false,
       shouldIgnoreJid: (jid) => jid === "status@broadcast",
     });
+    stateRef.sock = sock;
 
-    stateRef.sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", saveCreds);
 
-    stateRef.sock.ev.on("messages.update", (updates = []) => {
+    sock.ev.on("messages.update", (updates = []) => {
+      if (!isCurrentSocket(stateRef, sock, socketGeneration)) return;
+      stateRef.lastOutgoingAt = new Date().toISOString();
       for (const update of updates) {
         logOutgoingMessageStatus(stateRef.accountKey, update);
       }
     });
 
-    stateRef.sock.ev.on(
+    sock.ev.on(
       "connection.update",
       async ({ connection, lastDisconnect, qr }) => {
+        if (!isCurrentSocket(stateRef, sock, socketGeneration)) return;
+
         if (qr) {
           stateRef.currentQR = qr;
           stateRef.connectionStatus = "qr";
+          stateRef.lastQrAt = new Date().toISOString();
           await updateNotificationAccountStatus(stateRef.accountKey, {
             estado: "pendiente_qr",
             touchQr: true,
@@ -273,12 +298,14 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
           stateRef.manualDisconnect = false;
           stateRef.connectionStatus = "connected";
           stateRef.currentQR = null;
+          stateRef.lastConnectedAt = new Date().toISOString();
+          stateRef.lastDisconnect = null;
           stateRef.reconnectAttempts = 0;
           stateRef.reconnectCooldownUntil = 0;
           clearReconnectTimeout(stateRef);
           await updateNotificationAccountStatus(stateRef.accountKey, {
             estado: "conectada",
-            numero: extractConnectedPhone(stateRef.sock),
+            numero: extractConnectedPhone(sock),
             touchConnected: true,
           });
           console.log(`✅ WhatsApp conectado (${stateRef.accountKey})`);
@@ -286,6 +313,9 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
         }
 
         if (connection === "close") {
+          const wasQrFlow =
+            stateRef.connectionStatus === "qr" || Boolean(stateRef.currentQR);
+          stateRef.sock = null;
           stateRef.connectionStatus = "disconnected";
           const wasManualDisconnect =
             stateRef.manualDisconnect ||
@@ -293,10 +323,16 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
           stateRef.manualDisconnect = false;
           const statusCode = lastDisconnect?.error?.output?.statusCode;
           const reason = getDisconnectReason(statusCode);
-          const isSessionLost = shouldResetSessionOnDisconnect(
+          const isSessionLost = isSessionInvalidOnDisconnect(
             statusCode,
             reason,
           );
+          const qrTimedOut = isQRTimeout(statusCode, reason);
+          stateRef.lastDisconnect = {
+            status_code: statusCode ?? null,
+            reason,
+            at: new Date().toISOString(),
+          };
 
           logError(
             `⚠️ WhatsApp desconectado (${stateRef.accountKey})`,
@@ -307,7 +343,6 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
           notifyQRClients(stateRef, { status: "disconnected", reason });
 
           if (wasManualDisconnect) {
-            stateRef.sock = null;
             stateRef.currentQR = null;
             clearReconnectTimeout(stateRef);
             await updateNotificationAccountStatus(stateRef.accountKey, {
@@ -330,12 +365,31 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
               estado: "session_lost",
               touchDisconnected: true,
             });
-            await clearSessionFiles(stateRef);
             notifyQRClients(stateRef, {
               status: "session_lost",
               reason,
-              requiresQr: true,
+              requiresQr: false,
+              requiresManualReset: true,
+              sessionPreserved: true,
             });
+            return;
+          }
+
+          if (qrTimedOut && wasQrFlow) {
+            stateRef.connectionStatus = "qr_expired";
+            stateRef.currentQR = null;
+            clearReconnectTimeout(stateRef);
+            await updateNotificationAccountStatus(stateRef.accountKey, {
+              estado: "qr_expirado",
+              touchDisconnected: true,
+            });
+            notifyQRClients(stateRef, {
+              status: "qr_expired",
+              reason,
+              requiresQr: true,
+              action: "refresh_qr",
+            });
+            return;
           } else {
             await updateNotificationAccountStatus(stateRef.accountKey, {
               estado: "desconectada",
@@ -343,13 +397,13 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
             });
           }
 
-          stateRef.sock = null;
           scheduleReconnect(stateRef, { reason, immediate: isSessionLost });
         }
       },
     );
 
-    stateRef.sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      if (!isCurrentSocket(stateRef, sock, socketGeneration)) return;
       if (type !== "notify") return;
 
       const msg = messages[0];
@@ -360,6 +414,8 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
 
       if (isFromMe) return;
       if (from === "status@broadcast") return;
+
+      stateRef.lastMessageAt = new Date().toISOString();
 
       const text =
         msg.message.conversation ||
@@ -395,6 +451,12 @@ export function getWhatsAppAccountStatus(accountKey = DEFAULT_ACCOUNT_KEY) {
     has_qr: Boolean(stateRef.currentQR),
     qr_clients: stateRef.qrClients.size,
     user: stateRef.sock?.user || null,
+    session_preserved: true,
+    last_disconnect: stateRef.lastDisconnect,
+    last_connected_at: stateRef.lastConnectedAt,
+    last_qr_at: stateRef.lastQrAt,
+    last_message_at: stateRef.lastMessageAt,
+    last_outgoing_at: stateRef.lastOutgoingAt,
   };
 }
 
@@ -457,7 +519,11 @@ export function addQRClient(res, accountKey = DEFAULT_ACCOUNT_KEY) {
     );
   } else if (stateRef.connectionStatus === "session_lost") {
     res.write(
-      `data: ${JSON.stringify({ ...basePayload, status: "session_lost", requiresQr: true })}\n\n`,
+      `data: ${JSON.stringify({ ...basePayload, status: "session_lost", requiresQr: false, requiresManualReset: true, sessionPreserved: true })}\n\n`,
+    );
+  } else if (stateRef.connectionStatus === "qr_expired") {
+    res.write(
+      `data: ${JSON.stringify({ ...basePayload, status: "qr_expired", requiresQr: true, action: "refresh_qr" })}\n\n`,
     );
   } else if (stateRef.connectionStatus === "disconnected") {
     res.write(
@@ -481,8 +547,10 @@ function notifyQRClients(stateRef, data) {
     account_key: stateRef.accountKey,
     ...data,
   };
+  const logPayload = { ...payload };
+  if (logPayload.qr) logPayload.qr = "[REDACTED]";
   console.log(
-    `[SSE] ${stateRef.accountKey} broadcast (${stateRef.qrClients.size} clientes) → ${JSON.stringify(payload)}`,
+    `[SSE] ${stateRef.accountKey} broadcast (${stateRef.qrClients.size} clientes) → ${JSON.stringify(logPayload)}`,
   );
   for (const client of stateRef.qrClients) {
     client.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -498,6 +566,7 @@ function clearReconnectTimeout(stateRef) {
 
 function scheduleReconnect(stateRef, { reason = "unknown", immediate = false } = {}) {
   if (stateRef.reconnectTimeout) return;
+  if (["session_lost", "qr_expired"].includes(stateRef.connectionStatus)) return;
 
   const now = Date.now();
 
@@ -579,8 +648,8 @@ export async function clearSessionFiles(stateRefOrAccountKey = DEFAULT_ACCOUNT_K
       : stateRefOrAccountKey;
   try {
     await rm(stateRef.sessionPath, { recursive: true, force: true });
-    console.log(
-      `🧹 Sesión de WhatsApp limpiada (${stateRef.accountKey}). Se pedirá nuevo QR.`,
+    console.warn(
+      `🧹 Sesión de WhatsApp eliminada manualmente (${stateRef.accountKey}). Se pedirá nuevo QR.`,
     );
   } catch (err) {
     logError("❌ Error limpiando sesiones de WhatsApp", err, {
