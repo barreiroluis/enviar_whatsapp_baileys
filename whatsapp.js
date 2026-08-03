@@ -63,6 +63,7 @@ function getSessionState(accountKey = DEFAULT_ACCOUNT_KEY) {
       reconnectTimeout: null,
       reconnectAttempts: 0,
       reconnectCooldownUntil: 0,
+      sessionRecoveryAttempts: 0,
       isInitializing: false,
       manualDisconnect: false,
       suppressReconnectUntil: 0,
@@ -147,6 +148,10 @@ function isSessionInvalidOnDisconnect(statusCode, reason) {
       reason,
     )
   );
+}
+
+function isRecoverableBadSession(statusCode, reason) {
+  return statusCode === DisconnectReason.badSession || reason === "badSession";
 }
 
 function isQRTimeout(statusCode, reason) {
@@ -301,6 +306,7 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
           stateRef.lastConnectedAt = new Date().toISOString();
           stateRef.lastDisconnect = null;
           stateRef.reconnectAttempts = 0;
+          stateRef.sessionRecoveryAttempts = 0;
           stateRef.reconnectCooldownUntil = 0;
           clearReconnectTimeout(stateRef);
           await updateNotificationAccountStatus(stateRef.accountKey, {
@@ -327,6 +333,9 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
             statusCode,
             reason,
           );
+          const shouldRetryBadSession =
+            isRecoverableBadSession(statusCode, reason) &&
+            stateRef.sessionRecoveryAttempts < 1;
           const qrTimedOut = isQRTimeout(statusCode, reason);
           stateRef.lastDisconnect = {
             status_code: statusCode ?? null,
@@ -353,6 +362,24 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
               status: "disconnected",
               reason: "manual_disconnect",
               requiresQr: true,
+            });
+            return;
+          }
+
+          if (isSessionLost && shouldRetryBadSession) {
+            stateRef.sessionRecoveryAttempts += 1;
+            await updateNotificationAccountStatus(stateRef.accountKey, {
+              estado: "desconectada",
+              touchDisconnected: true,
+            });
+            console.warn(
+              `⚠️ badSession transitorio (${stateRef.accountKey}). ` +
+                "Se intentará recuperar el socket conservando la sesión " +
+                `(intento ${stateRef.sessionRecoveryAttempts}/1).`,
+            );
+            scheduleReconnect(stateRef, {
+              reason: "badSession_retry",
+              immediate: true,
             });
             return;
           }
