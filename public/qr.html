@@ -70,7 +70,7 @@
 
         if (data.status === "session_lost") {
           hideQr();
-          setStatus("⚠️ Sesión inválida. La autenticación fue conservada; se requiere un reinicio manual de sesión.");
+          setStatus("⚠️ Sesión inválida. Se limpió la sesión y se solicitará un nuevo QR...");
           return;
         }
 

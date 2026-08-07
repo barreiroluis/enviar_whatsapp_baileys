@@ -385,19 +385,28 @@ export async function initWhatsApp(accountKey = DEFAULT_ACCOUNT_KEY) {
           }
 
           if (isSessionLost) {
-            stateRef.connectionStatus = "session_lost";
             stateRef.currentQR = null;
             clearReconnectTimeout(stateRef);
+
+            // WhatsApp ya invalidó esta autenticación. Conservar los archivos
+            // solo provoca que cada reinicio vuelva a leer una sesión inútil
+            // y quede bloqueado en `session_lost` sin emitir QR.
+            await clearSessionFiles(stateRef);
+            stateRef.connectionStatus = "disconnected";
             await updateNotificationAccountStatus(stateRef.accountKey, {
-              estado: "session_lost",
+              estado: "pendiente_qr",
               touchDisconnected: true,
             });
             notifyQRClients(stateRef, {
               status: "session_lost",
               reason,
-              requiresQr: false,
-              requiresManualReset: true,
-              sessionPreserved: true,
+              requiresQr: true,
+              requiresManualReset: false,
+              sessionPreserved: false,
+            });
+            scheduleReconnect(stateRef, {
+              reason: "invalid_session_reset",
+              immediate: true,
             });
             return;
           }
@@ -546,7 +555,7 @@ export function addQRClient(res, accountKey = DEFAULT_ACCOUNT_KEY) {
     );
   } else if (stateRef.connectionStatus === "session_lost") {
     res.write(
-      `data: ${JSON.stringify({ ...basePayload, status: "session_lost", requiresQr: false, requiresManualReset: true, sessionPreserved: true })}\n\n`,
+      `data: ${JSON.stringify({ ...basePayload, status: "session_lost", requiresQr: true, requiresManualReset: false, sessionPreserved: false })}\n\n`,
     );
   } else if (stateRef.connectionStatus === "qr_expired") {
     res.write(

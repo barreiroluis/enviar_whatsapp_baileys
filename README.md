@@ -59,7 +59,8 @@ Cuando WhatsApp devuelve `loggedOut` (por ejemplo `401`), el servicio ahora:
 
 - marca estado `session_lost`
 - limpia `./sessions` automaticamente
-- reintenta iniciar para generar nuevo QR
+- reintenta iniciar para generar un nuevo QR
+- conserva las sesiones que WhatsApp acepta como validas
 
 Estados SSE relevantes en `GET /qr`:
 
@@ -67,7 +68,7 @@ Estados SSE relevantes en `GET /qr`:
 - `qr`
 - `disconnected`
 - `reconnecting` (incluye `attempt` y `delayMs`)
-- `session_lost` (incluye `requiresQr: true`)
+- `session_lost` (incluye `requiresQr: true` mientras se reinicia la cuenta)
 
 Variables opcionales:
 
