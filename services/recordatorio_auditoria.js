@@ -238,6 +238,19 @@ export async function ensureRecordatorioAuditSchema(conn) {
     "numero_emisor VARCHAR(40) NULL AFTER account_key",
   );
 
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS recordatorio_cron_envios (
+      id_empresa BIGINT NOT NULL,
+      id_credito BIGINT NOT NULL,
+      fecha_local DATE NOT NULL,
+      id_msg VARCHAR(255) NULL,
+      evento_pendiente VARCHAR(40) NULL,
+      creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id_empresa, id_credito, fecha_local),
+      UNIQUE KEY uk_evento_pendiente (id_empresa, id_credito, evento_pendiente)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   schemaReady = true;
 }
 

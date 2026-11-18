@@ -61,3 +61,26 @@ export function toCrmJid(numberOrJid) {
   if (!digits) return null;
   return `${digits}@c.us`;
 }
+
+// Misma regla de contacto que include/celular_cliente.php en Cuota Fácil.
+export function normalizeCustomerPhone(value) {
+  if (typeof value !== "string" || !/^\+?[0-9 ()-]+$/.test(value.trim())) {
+    return null;
+  }
+  const number = value.replace(/\D/g, "");
+  if (!/^[1-9][0-9]{9,14}$/.test(number)) return null;
+
+  let national = number;
+  if (number.startsWith("54")) {
+    if (!/^549?[1-3][0-9]{9}$/.test(number)) return null;
+    national = number.slice(number.length === 13 ? 3 : 2);
+  }
+
+  const subscriber = national.slice(-8);
+  if (/^([0-9])\1{7}$/.test(subscriber)
+    || "01234567890123456789".includes(subscriber)
+    || "98765432109876543210".includes(subscriber)) {
+    return null;
+  }
+  return number;
+}

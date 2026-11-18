@@ -3,6 +3,7 @@ import { saveMessageMysql } from "../adapter/mysql.js";
 import { cleanNumber, jidToPhone, toCrmJid } from "../utils/cleanNumber.js";
 import { getCurrentDateTime } from "../utils/date.js";
 import { resolveMediaFromUrl } from "../utils/media.js";
+import { logError } from "../utils/logger.js";
 import { resolveAppTimeZone } from "../utils/timezone.js";
 
 export async function enviar_mensaje({
@@ -19,7 +20,9 @@ export async function enviar_mensaje({
   const sock = getSock(account_key);
 
   if (!sock || !sock.user) {
-    throw new Error(`WhatsApp no conectado (${account_key})`);
+    const error = new Error(`WhatsApp no conectado (${account_key})`);
+    error.code = "WHATSAPP_DISCONNECTED";
+    throw error;
   }
 
   if (!to || !message) {
@@ -94,21 +97,29 @@ export async function enviar_mensaje({
 
   // 💾 Guardar SOLO lo que manda el sistema
   if (process.env.DATABASE === "mysql") {
-    await saveMessageMysql(
-      fromCrmContact,
-      toCrmContact,
-      sentMessageText,
-      null,
-      id_msg,
-      "",
-      id_operador,
-      {
-        to_transport_jid: toCrmContact,
-        chat_id_context: toCrmContact,
-        numero_emisor_context: fromCrmContact,
-        account_key_context: account_key,
-      },
-    );
+    try {
+      await saveMessageMysql(
+        fromCrmContact,
+        toCrmContact,
+        sentMessageText,
+        null,
+        id_msg,
+        "",
+        id_operador,
+        {
+          to_transport_jid: toCrmContact,
+          chat_id_context: toCrmContact,
+          numero_emisor_context: fromCrmContact,
+          account_key_context: account_key,
+        },
+      );
+    } catch (error) {
+      if (source !== "cron" || !id_msg) throw error;
+      logError("WhatsApp aceptó el recordatorio, pero falló el registro del chat", error, {
+        account_key,
+        id_msg,
+      });
+    }
   }
 
   return {

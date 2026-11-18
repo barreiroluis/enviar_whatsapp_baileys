@@ -31,6 +31,7 @@ import {
   renderTemplate,
   shouldSendCredit,
 } from "./utils/recordatorio.js";
+import { normalizeCustomerPhone } from "./utils/cleanNumber.js";
 import { resolveAppTimeZone } from "./utils/timezone.js";
 import { initWhatsApp, getSock, getDefaultAccountKey } from "./whatsapp.js";
 
@@ -346,6 +347,7 @@ function generarRecordatorioDesdePlantilla(row, dias, empresaConfig) {
 export async function procesarRecordatoriosCron() {
   const ahora = moment.tz(APP_TIME_ZONE);
   const hora = ahora.hour();
+  const fechaLocal = getFechaLocal(APP_TIME_ZONE, ahora.toDate());
   const hoy = ahora.clone().startOf("day").toDate();
 
   let conn;
@@ -357,6 +359,9 @@ export async function procesarRecordatoriosCron() {
   let candidatosDb = 0;
   let candidatosEnviables = 0;
   let limiteAlcanzado = false;
+  let intentosEnvio = 0;
+  const pendientesPorCuenta = new Map();
+  const cuentasPorSucursal = new Map();
 
   try {
     conn = await getConnectionWithRelease();
@@ -402,32 +407,6 @@ export async function procesarRecordatoriosCron() {
         status: "outside_schedule",
       });
       return;
-    }
-
-    if (!getSock()?.user) {
-      console.log(
-        `ℹ️ Cuenta default no conectada. Se intentará resolver una cuenta por sucursal antes de omitir cada envío.`,
-      );
-    }
-
-    const unlockResult = await conn.query(
-      `
-      UPDATE creditos
-      SET recordatorio_lock = 0
-      WHERE id_empresa = ?
-        AND recordatorio_lock = 1
-        AND (
-          recordatorio_update IS NULL
-          OR DATE(recordatorio_update) < CURDATE()
-        )
-      `,
-      [ID_EMPRESA],
-    );
-
-    if (unlockResult?.affectedRows > 0) {
-      console.log(
-        `🧹 Locks liberados empresa ${ID_EMPRESA}: ${unlockResult.affectedRows}`,
-      );
     }
 
     const rows = await conn.query(
@@ -540,7 +519,6 @@ export async function procesarRecordatoriosCron() {
           AND pe.estado NOT IN (5,7,8,9)
           AND cred.fecha_alta != CURDATE()
           AND cred.id_empresa = ?
-          AND cred.recordatorio_lock = 0
           AND (
               cred.recordatorio_update IS NULL
               OR DATE(cred.recordatorio_update) < CURDATE()
@@ -629,178 +607,160 @@ export async function procesarRecordatoriosCron() {
         continue;
       }
 
-      creditosParaEnviar.push(creditoConDias);
+      const celularNormalizado = normalizeCustomerPhone(row.celular);
+      if (!celularNormalizado) {
+        omitidos += 1;
+        await insertRecordatorioDetalle(conn, buildDetalleFromCredito({
+          idRun,
+          idEmpresa: ID_EMPRESA,
+          credito: creditoConDias,
+          evento: eventKey,
+          estado: "omitido",
+          motivo: String(row.celular ?? "").trim() ? "celular_invalido" : "sin_celular",
+          fechaLocal,
+        }));
+        continue;
+      }
+
+      creditosParaEnviar.push({ ...creditoConDias, celularNormalizado });
     }
 
     candidatosEnviables = creditosParaEnviar.length;
 
-    for (let i = 0; i < creditosParaEnviar.length; i += 1) {
-      const credito = creditosParaEnviar[i];
-      if (enviados >= empresaConfig.delivery.max_messages_per_run) {
-        limiteAlcanzado = true;
-        console.log(
-          `⏹️ Límite de ${empresaConfig.delivery.max_messages_per_run} envíos alcanzado`,
-        );
-        for (const pendiente of creditosParaEnviar.slice(i)) {
-          omitidos += 1;
-          await insertRecordatorioDetalle(
-            conn,
-            buildDetalleFromCredito({
-              idRun,
-              idEmpresa: ID_EMPRESA,
-              credito: pendiente,
-              evento: pendiente.eventKey || "none",
-              estado: "omitido",
-              motivo: "limite_por_corrida_alcanzado",
-            }),
-          );
-        }
-        break;
-      }
+    for (const credito of creditosParaEnviar) {
+      let accountKey;
+      let despachoIniciado = false;
+      const envioKey = [ID_EMPRESA, credito.id_credito, fechaLocal];
+      const eventoPendiente = `${credito.eventKey}:${moment(credito.fecha_vencimiento).format("YYYY-MM-DD")}`;
+      const registrar = (estado, motivo, extra = {}) =>
+        insertRecordatorioDetalle(conn, buildDetalleFromCredito({
+          idRun,
+          idEmpresa: ID_EMPRESA,
+          credito,
+          evento: credito.eventKey,
+          estado,
+          motivo,
+          fechaLocal,
+          accountKey,
+          ...extra,
+        }));
+      const registrarDesconexion = async () => {
+        pendientesPorCuenta.set(accountKey, (pendientesPorCuenta.get(accountKey) || 0) + 1);
+        await registrar("candidato", "whatsapp_desconectado");
+      };
 
       try {
-        const lockResult = await conn.query(
-          `
-          UPDATE creditos
-          SET recordatorio_lock = 1
-          WHERE id = ?
-            AND recordatorio_lock = 0
-          `,
-          [credito.id_credito],
-        );
-
-        if (lockResult?.affectedRows !== 1) {
-          omitidos += 1;
-          await insertRecordatorioDetalle(
-            conn,
-            buildDetalleFromCredito({
-              idRun,
-              idEmpresa: ID_EMPRESA,
-              credito,
-              evento: credito.eventKey || "none",
-              estado: "omitido",
-              motivo: "recordatorio_lock_no_obtenido",
-            }),
-          );
-          continue;
-        }
-
-        const recordatorio = generarRecordatorioDesdePlantilla(
-          credito,
-          credito.dias,
-          empresaConfig,
-        );
-        const mensaje = recordatorio.mensaje;
+        const mensaje = generarRecordatorioDesdePlantilla(credito, credito.dias, empresaConfig).mensaje;
         if (!mensaje) {
-          await conn.query(
-            `
-            UPDATE creditos
-            SET recordatorio_lock = 0
-            WHERE id = ?
-            `,
-            [credito.id_credito],
-          );
           omitidos += 1;
-          await insertRecordatorioDetalle(
-            conn,
-            buildDetalleFromCredito({
-              idRun,
-              idEmpresa: ID_EMPRESA,
-              credito,
-              evento: credito.eventKey || "none",
-              estado: "omitido",
-              motivo: "plantilla_vacia",
-            }),
-          );
+          await registrar("omitido", "plantilla_vacia");
           continue;
         }
 
-        const cuentaNotificacion = await resolveNotificationAccountForSucursal(
-          conn,
-          ID_EMPRESA,
-          credito.id_sucursal,
+        const [envioAnterior] = await conn.query(
+          `SELECT id_msg, creado_en <= NOW() - INTERVAL 30 MINUTE AS vencido
+           FROM recordatorio_cron_envios
+           WHERE id_empresa = ? AND id_credito = ?
+             AND (fecha_local = ? OR evento_pendiente = ?)
+           ORDER BY id_msg IS NULL DESC LIMIT 1`,
+          [...envioKey, eventoPendiente],
         );
-        const resulEnvio = await enviar_mensaje({
-          to: credito.celular,
+        if (envioAnterior) {
+          if (!envioAnterior.id_msg && envioAnterior.vencido) {
+            errores += 1;
+            await registrar("error", "resultado_incierto");
+          }
+          continue;
+        }
+
+        const sucursal = Number(credito.id_sucursal || 0);
+        if (!cuentasPorSucursal.has(sucursal)) {
+          const cuenta = await resolveNotificationAccountForSucursal(conn, ID_EMPRESA, sucursal);
+          cuentasPorSucursal.set(sucursal, cuenta.accountKey);
+        }
+        accountKey = cuentasPorSucursal.get(sucursal);
+        if (!getSock(accountKey)?.user) {
+          await registrarDesconexion();
+          continue;
+        }
+
+        if (intentosEnvio >= empresaConfig.delivery.max_messages_per_run) {
+          limiteAlcanzado = true;
+          await registrar("candidato", "limite_por_corrida_alcanzado");
+          continue;
+        }
+
+        try {
+          await conn.query(
+            `INSERT INTO recordatorio_cron_envios (id_empresa, id_credito, fecha_local, evento_pendiente)
+             VALUES (?, ?, ?, ?)`,
+            [...envioKey, eventoPendiente],
+          );
+        } catch (err) {
+          if (err?.code === "ER_DUP_ENTRY") continue;
+          throw err;
+        }
+
+        despachoIniciado = true;
+        intentosEnvio += 1;
+        const resultado = await enviar_mensaje({
+          to: credito.celularNormalizado,
           message: mensaje,
           id_operador: 0,
           source: "cron",
-          account_key: cuentaNotificacion.accountKey,
+          account_key: accountKey,
         });
+        if (!resultado.id_msg) throw new Error("WhatsApp no devolvió un ID de mensaje");
 
-        await conn.query(
-          `
-          UPDATE creditos
-          SET recordatorio_update = NOW(),
-              recordatorio_lock = 0
-          WHERE id = ?
-          `,
-          [credito.id_credito],
-        );
-
-        console.log(
-          resulEnvio,
-          "Crédito:",
-          credito.id_credito,
-          "Evento:",
-          credito.eventKey,
-          "Empresa:",
-          credito.nombre_empresa,
-          "Cliente:",
-          credito.nombre,
-          "Sucursal:",
-          credito.nombre_sucursal || credito.id_sucursal || "Global",
-          "Cuenta WA:",
-          resulEnvio?.account_key || "default",
-          "Cel:",
-          credito.celular,
-        );
-
+        await conn.query("START TRANSACTION");
+        try {
+          await conn.query(
+            `UPDATE creditos SET recordatorio_update = NOW(), recordatorio_lock = 0
+             WHERE id = ? AND id_empresa = ?`,
+            [credito.id_credito, ID_EMPRESA],
+          );
+          await registrar("enviado", "enviado", {
+            idMsg: resultado.id_msg,
+            numeroEmisor: resultado.numero_emisor,
+          });
+          await conn.query(
+            `UPDATE recordatorio_cron_envios SET id_msg = ?, evento_pendiente = NULL
+             WHERE id_empresa = ? AND id_credito = ? AND fecha_local = ?`,
+            [resultado.id_msg, ...envioKey],
+          );
+          await conn.query("COMMIT");
+        } catch (err) {
+          await conn.query("ROLLBACK");
+          throw err;
+        }
         enviados += 1;
         creditosNotificados += 1;
-        await insertRecordatorioDetalle(
-          conn,
-          buildDetalleFromCredito({
-            idRun,
-            idEmpresa: ID_EMPRESA,
-            credito,
-            evento: credito.eventKey || "none",
-            estado: "enviado",
-            motivo: "enviado",
-            idMsg: resulEnvio?.id_msg,
-            accountKey: resulEnvio?.account_key || cuentaNotificacion.accountKey,
-            numeroEmisor: resulEnvio?.numero_emisor,
-          }),
-        );
         await sleep(700);
       } catch (err) {
+        if (despachoIniciado && err?.code === "WHATSAPP_DISCONNECTED") {
+          await conn.query(
+            `DELETE FROM recordatorio_cron_envios
+             WHERE id_empresa = ? AND id_credito = ? AND fecha_local = ?`,
+            envioKey,
+          );
+          await registrarDesconexion();
+          continue;
+        }
+
         errores += 1;
-        await conn.query(
-          `
-          UPDATE creditos
-          SET recordatorio_lock = 0
-          WHERE id = ?
-          `,
-          [credito.id_credito],
-        );
-        await insertRecordatorioDetalle(
-          conn,
-          buildDetalleFromCredito({
-            idRun,
-            idEmpresa: ID_EMPRESA,
-            credito,
-            evento: credito.eventKey || "none",
-            estado: "error",
-            motivo: "error_envio",
-            errorMessage: err?.message || String(err),
-          }),
-        );
-        logError(`❌ Error celular ${credito.celular}`, err, {
+        await registrar("error", despachoIniciado ? "resultado_incierto" : "error_envio");
+        logError("Error procesando recordatorio", err, {
           credito: credito.id_credito,
           empresa: ID_EMPRESA,
           evento: credito.eventKey,
+          accountKey,
         });
+        if (despachoIniciado) await sleep(700);
       }
+    }
+
+    for (const [accountKey, pendientes] of pendientesPorCuenta) {
+      console.warn(`WhatsApp desconectado (${accountKey}): ${pendientes} recordatorios pendientes`);
     }
 
     console.log(
@@ -813,7 +773,9 @@ export async function procesarRecordatoriosCron() {
           ? enviados > 0
             ? "partial_error"
             : "error"
-          : "ok",
+          : pendientesPorCuenta.size && enviados === 0
+            ? "whatsapp_disconnected"
+            : "ok",
       candidatos_db: candidatosDb,
       candidatos_enviables: candidatosEnviables,
       enviados,
