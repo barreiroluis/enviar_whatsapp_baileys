@@ -28,6 +28,29 @@ npm start
 
 Por defecto levanta en `http://localhost:3000`.
 
+## Limpieza automatica de logs
+
+La carpeta `logs/` conserva por defecto los ultimos 7 dias de archivos
+`history-AAAA-MM-DD.log`. La limpieza se ejecuta al iniciar, al escribir y
+cada hora, incluso si no hay actividad.
+
+```dotenv
+LOG_RETENTION_DAYS=7
+LOG_MAX_SIZE_MB=5
+LOG_ERROR_MAX_FILES=3
+```
+
+`history-*.log`, `latest.log` y `lasted.log` tienen un limite de 5 MiB por
+archivo. Al llenarse, se descartan las lineas mas antiguas para conservar las
+recientes; un mensaje individual que exceda el limite se recorta.
+`latest.log` y `lasted.log` se reinician con el servicio.
+`error.log` rota por tamano y conserva hasta 3 archivos en total, incluyendo
+el activo. La retencion por dias se aplica a los historiales diarios.
+Los valores deben ser enteros positivos; un valor invalido usa el predeterminado.
+
+Sube los cambios y reinicia el servicio para aplicarlos en el servidor.
+Los historiales vencidos se eliminan tambien en ese primer inicio.
+
 ## Endpoints
 
 - `GET /health`: estado general del servidor y cuentas cargadas

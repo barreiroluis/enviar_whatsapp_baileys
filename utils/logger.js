@@ -1,3 +1,4 @@
+import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import util from "util";
@@ -10,7 +11,46 @@ const LATEST_LOG_PATH = path.join(LOG_DIR, "latest.log");
 const LASTED_LOG_PATH = path.join(LOG_DIR, "lasted.log");
 const HISTORY_PREFIX = "history-";
 const HISTORY_FILE_REGEX = /^history-(\d{4}-\d{2}-\d{2})\.log$/;
-const MAX_HISTORY_DAYS = 30;
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : fallback;
+}
+
+const MAX_HISTORY_DAYS = positiveInteger(process.env.LOG_RETENTION_DAYS, 7);
+const MAX_LOG_BYTES = positiveInteger(process.env.LOG_MAX_SIZE_MB, 5) * 1024 * 1024;
+const MAX_ERROR_FILES = positiveInteger(process.env.LOG_ERROR_MAX_FILES, 3);
+
+// Keep recent complete lines, reading only the tail even for very large files.
+function limitLogSize(filePath, incomingBytes = 0) {
+  if (!fs.existsSync(filePath)) return;
+  const size = fs.statSync(filePath).size;
+  if (size + incomingBytes <= MAX_LOG_BYTES) return;
+
+  const keepBytes = Math.max(0, Math.min(
+    Math.floor(MAX_LOG_BYTES / 2), MAX_LOG_BYTES - incomingBytes,
+  ));
+  const tail = Buffer.alloc(Math.min(size, keepBytes));
+  const fd = fs.openSync(filePath, "r");
+  try {
+    fs.readSync(fd, tail, 0, tail.length, size - tail.length);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const newline = tail.indexOf(10);
+  fs.writeFileSync(filePath, newline < 0 ? Buffer.alloc(0) : tail.subarray(newline + 1));
+}
+
+function appendBoundedLog(filePath, line) {
+  let data = Buffer.from(`${line}\n`, "utf8");
+  if (data.length > MAX_LOG_BYTES) {
+    const marker = Buffer.from("… [mensaje truncado]\n", "utf8");
+    const prefix = data.subarray(0, MAX_LOG_BYTES - marker.length)
+      .toString("utf8").replace(/\uFFFD$/, "");
+    data = Buffer.concat([Buffer.from(prefix), marker]);
+  }
+  limitLogSize(filePath, data.length);
+  fs.appendFileSync(filePath, data);
+}
 
 const NOISY_PATTERNS = [
   "Closing session",
@@ -81,6 +121,8 @@ function cleanupOldHistoryLogs() {
 
     if (fileDate < cutoff) {
       fs.rmSync(path.join(LOG_DIR, entry.name), { force: true });
+    } else {
+      limitLogSize(path.join(LOG_DIR, entry.name));
     }
   }
 }
@@ -90,9 +132,9 @@ function writeAppLog(level, message) {
   cleanupOldHistoryLogs();
 
   const line = `[${formatDateTime()}] [${String(level).toUpperCase()}] ${message}`;
-  fs.appendFileSync(LATEST_LOG_PATH, `${line}\n`, "utf8");
-  fs.appendFileSync(LASTED_LOG_PATH, `${line}\n`, "utf8");
-  fs.appendFileSync(getHistoryLogPath(), `${line}\n`, "utf8");
+  appendBoundedLog(LATEST_LOG_PATH, line);
+  appendBoundedLog(LASTED_LOG_PATH, line);
+  appendBoundedLog(getHistoryLogPath(), line);
 }
 
 function shouldIgnoreConsoleMessage(message) {
@@ -129,6 +171,12 @@ export function setupConsoleLogging() {
 }
 
 ensureLogDir();
+cleanupOldHistoryLogs();
+limitLogSize(path.join(LOG_DIR, "error.log"));
+
+// Also clean up when the service stays idle across midnight.
+const cleanupTimer = setInterval(cleanupOldHistoryLogs, 60 * 60 * 1000);
+cleanupTimer.unref();
 
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || "info",
@@ -141,6 +189,9 @@ const logger = winston.createLogger({
     new winston.transports.File({
       filename: path.join(LOG_DIR, "error.log"),
       level: "error",
+      maxsize: MAX_LOG_BYTES,
+      maxFiles: MAX_ERROR_FILES,
+      tailable: true,
     }),
   ],
 });
